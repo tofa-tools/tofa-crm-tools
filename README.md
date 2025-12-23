@@ -89,6 +89,15 @@ tofa-crm/
 - Tailwind CSS
 - React Query
 
+## 📦 Dependencies
+
+This project uses **separate dependency management**:
+
+- **Backend (Python):** `requirements.txt` - Install with `pip install -r requirements.txt`
+- **Frontend (Node.js):** `frontend-react/package.json` - Install with `cd frontend-react && npm install`
+
+See [DEPENDENCIES.md](DEPENDENCIES.md) for detailed information.
+
 ## 📚 Documentation
 
 - [Deployment Guide](DEPLOYMENT_GUIDE.md) - Deploy to PythonAnywhere + Vercel

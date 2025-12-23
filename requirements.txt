@@ -1,12 +1,23 @@
-fastapi
-uvicorn
-sqlmodel
-psycopg2-binary
-streamlit
-pandas
-openpyxl
-python-multipart
-python-jose[cryptography]
-passlib[bcrypt]
-requests
-python-dotenv
+# Backend Dependencies for TOFA Academy CRM
+# FastAPI Backend - Python 3.10+
+
+# Web Framework
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+
+# Database
+sqlmodel>=0.0.14
+psycopg2-binary>=2.9.9
+
+# Authentication & Security
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+
+# File Processing
+pandas>=2.1.0
+openpyxl>=3.1.2
+
+# Utilities
+python-multipart>=0.0.6
+python-dotenv>=1.0.0
+requests>=2.31.0

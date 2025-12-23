@@ -1,0 +1,9 @@
+# Development Dependencies (Optional)
+# These are only needed for the old Streamlit frontend or setup scripts
+
+# Old Streamlit Frontend (optional - only if you want to keep using it)
+# streamlit>=1.28.0
+
+# If you want to keep the setup script working:
+# streamlit>=1.28.0
+
