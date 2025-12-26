@@ -102,39 +102,105 @@ ACCESS_TOKEN_EXPIRE_MINUTES=60
 4. Select Python version (3.10 recommended)
 5. Click **Next**
 
-### Step 6: Configure WSGI File
+### Step 6: Configure for ASGI (FastAPI)
 
-1. In the **Web** tab, click on the WSGI file link
-2. Delete the default content and replace with:
+**Important:** FastAPI uses ASGI, not WSGI. PythonAnywhere requires a special setup.
+
+📖 **See [ASGI_PYTHONANYWHERE_GUIDE.md](ASGI_PYTHONANYWHERE_GUIDE.md) for complete step-by-step instructions.**
+
+**Quick Summary:**
+1. Create an Always-on Task to run uvicorn
+2. Configure WSGI file as a proxy to forward requests
+3. Test your deployment
+
+#### Option A: Always-on Task (Recommended for FastAPI)
+
+1. **Create a startup script:**
+
+In the Bash console, create a startup file:
+
+```bash
+cd ~/tofa-crm
+nano start_server.sh
+```
+
+Add this content (replace `yourusername` with your username):
+
+```bash
+#!/bin/bash
+cd /home/yourusername/tofa-crm
+source venv/bin/activate
+export DATABASE_URL='postgresql://user:password@host:port/database'
+export SECRET_KEY='your-secret-key'
+export ALGORITHM='HS256'
+export ACCESS_TOKEN_EXPIRE_MINUTES='60'
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+```
+
+Make it executable:
+```bash
+chmod +x start_server.sh
+```
+
+2. **Create a simple WSGI file that redirects:**
+
+In the **Web** tab, click on the WSGI file link and replace with:
+
+```python
+# Simple WSGI proxy for ASGI app running on port 8000
+def application(environ, start_response):
+    # Redirect to the Always-on task
+    status = '302 Found'
+    headers = [('Location', 'http://yourusername.pythonanywhere.com:8000' + environ['PATH_INFO'])]
+    start_response(status, headers)
+    return []
+```
+
+Actually, better approach - create a WSGI wrapper:
 
 ```python
 import sys
 import os
 
 # Add your project directory to the path
-path = '/home/yourusername/tofa-crm'
+path = '/home/yourusername/tofa-crm'  # ← CHANGE: Replace 'yourusername'
 if path not in sys.path:
     sys.path.insert(0, path)
 
 # Set environment variables
-os.environ['DATABASE_URL'] = 'postgresql://user:password@host:port/database'
-os.environ['SECRET_KEY'] = 'your-secret-key'
+os.environ['DATABASE_URL'] = 'postgresql://user:password@host:port/database'  # ← CHANGE
+os.environ['SECRET_KEY'] = 'your-secret-key'  # ← CHANGE
 os.environ['ALGORITHM'] = 'HS256'
 os.environ['ACCESS_TOKEN_EXPIRE_MINUTES'] = '60'
 
 # Activate virtual environment
-activate_this = '/home/yourusername/tofa-crm/venv/bin/activate_this.py'
-with open(activate_this) as file_:
-    exec(file_.read(), dict(__file__=activate_this))
+activate_this = '/home/yourusername/tofa-crm/venv/bin/activate_this.py'  # ← CHANGE
+try:
+    with open(activate_this) as file_:
+        exec(file_.read(), dict(__file__=activate_this))
+except FileNotFoundError:
+    # Alternative activation method
+    venv_site_packages = '/home/yourusername/tofa-crm/venv/lib/python3.10/site-packages'  # ← CHANGE
+    if venv_site_packages not in sys.path:
+        sys.path.insert(0, venv_site_packages)
 
-# Import your FastAPI app
-from backend.main import app as application
+# Import ASGI app and wrap it as WSGI
+from asgiref.wsgi import WsgiToAsgi
+from backend.main import app
 
-if __name__ == "__main__":
-    application.run()
+# Wrap FastAPI (ASGI) app as WSGI
+application = WsgiToAsgi(app)
 ```
 
-**Note:** Replace `yourusername` with your PythonAnywhere username!
+3. **Set up Always-on Task:**
+
+- Go to **Tasks** tab in PythonAnywhere
+- Click **Create a new always-on task**
+- Command: `/home/yourusername/tofa-crm/start_server.sh` (or full command)
+- Click **Create**
+- Make sure it's enabled (green button)
+
+📖 **For detailed ASGI configuration, see [ASGI_PYTHONANYWHERE_GUIDE.md](ASGI_PYTHONANYWHERE_GUIDE.md)**
 
 ### Step 7: Configure Static Files (if needed)
 

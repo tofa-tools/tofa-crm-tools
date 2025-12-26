@@ -1,23 +1,24 @@
-# Backend Dependencies for TOFA Academy CRM
-# FastAPI Backend - Python 3.10+
+# FastAPI (for ASGI hosting)
+fastapi
+uvicorn
 
-# Web Framework
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
+# Flask (for WSGI hosting on PythonAnywhere Free)
+flask
+flask-cors
 
 # Database
-sqlmodel>=0.0.14
-psycopg2-binary>=2.9.9
+sqlmodel
+psycopg2-binary
 
-# Authentication & Security
-python-jose[cryptography]>=3.3.0
-passlib[bcrypt]>=1.7.4
+# Authentication
+python-jose[cryptography]
+passlib[bcrypt]
 
 # File Processing
-pandas>=2.1.0
-openpyxl>=3.1.2
+pandas
+openpyxl
 
 # Utilities
-python-multipart>=0.0.6
-python-dotenv>=1.0.0
-requests>=2.31.0
+python-multipart
+python-dotenv
+requests
