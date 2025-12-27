@@ -25,7 +25,7 @@ def get_session() -> Generator[Session, None, None]:
 
 
 def get_session_sync() -> Session:
-    """Get a synchronous database session (for Flask)."""
+    """Get a synchronous database session."""
     return Session(engine)
 
 

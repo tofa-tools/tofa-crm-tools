@@ -1,10 +1,6 @@
-# FastAPI (for ASGI hosting)
+# FastAPI (ASGI framework)
 fastapi
 uvicorn
-
-# Flask (for WSGI hosting on PythonAnywhere Free)
-flask
-flask-cors
 
 # Database
 sqlmodel

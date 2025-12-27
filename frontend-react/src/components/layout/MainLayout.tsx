@@ -1,14 +1,15 @@
 'use client';
 
-import { ReactNode } from 'react';
+import { ReactNode, useEffect } from 'react';
 import { Sidebar } from './Sidebar';
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { useSidebar } from '@/context/SidebarContext';
 
 export function MainLayout({ children }: { children: ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
+  const { isCollapsed, toggleCollapse } = useSidebar();
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -33,7 +34,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-gray-50">
-      <Sidebar />
+      <Sidebar isCollapsed={isCollapsed} onToggleCollapse={toggleCollapse} />
       <main className="flex-1 overflow-auto">
         <div className="p-8">{children}</div>
       </main>
