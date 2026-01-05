@@ -1,18 +1,6 @@
-// User types
-export interface User {
-  id: number;
-  email: string;
-  full_name: string;
-  role: 'team_member' | 'team_lead' | 'observer';
-}
-
-export interface UserCreate {
-  email: string;
-  password: string;
-  full_name: string;
-  role: string;
-  center_ids: number[];
-}
+// Re-export Zod schemas and types for backward compatibility
+export type { User, UserCreate, UserRole } from '@/lib/schemas/user';
+export { UserSchema, UserCreateSchema, UserRoleSchema } from '@/lib/schemas/user';
 
 // Center types
 export interface Center {
@@ -30,32 +18,21 @@ export interface CenterCreate {
   location?: string;
 }
 
-// Lead types
-export interface Lead {
-  id: number;
-  created_time: string;
-  player_name: string;
-  player_age_category: string;
-  phone: string;
-  email: string | null;
-  address: string | null;
-  status: LeadStatus;
-  next_followup_date: string | null;
-  center_id: number;
-}
+// Re-export Lead schemas and types
+export type { Lead, LeadStatus, LeadUpdate, LeadCreate } from '@/lib/schemas/lead';
+export { LeadSchema, LeadUpdateSchema, LeadCreateSchema, LeadStatusSchema } from '@/lib/schemas/lead';
 
-export type LeadStatus = 
-  | 'New' 
-  | 'Called' 
-  | 'Trial Scheduled' 
-  | 'Joined' 
-  | 'Dead/Not Interested';
+// Re-export Batch schemas and types
+export type { Batch, BatchCreate } from '@/lib/schemas/batch';
+export { BatchSchema, BatchCreateSchema } from '@/lib/schemas/batch';
 
-export interface LeadUpdate {
-  status: LeadStatus;
-  next_date?: string | null;
-  comment?: string | null;
-}
+// Re-export Attendance schemas and types
+export type { Attendance, AttendanceStatus, AttendanceCreate } from '@/lib/schemas/attendance';
+export { AttendanceSchema, AttendanceStatusSchema, AttendanceCreateSchema } from '@/lib/schemas/attendance';
+
+// Re-export Audit Log types
+export type { AuditLog, AuditLogActionType } from '@/lib/schemas/audit';
+export { AuditLogSchema, AuditLogActionTypeSchema } from '@/lib/schemas/audit';
 
 // Comment types
 export interface Comment {
@@ -64,6 +41,7 @@ export interface Comment {
   timestamp: string;
   user_id: number;
   lead_id: number;
+  mentioned_user_ids?: string; // JSON array string
 }
 
 // Auth types
@@ -89,5 +67,9 @@ export interface UploadResponse {
   leads_added?: number;
   unknown_tags?: string[];
 }
+
+// Import Preview types
+export type { ImportPreviewRow, ImportPreviewResponse } from '@/lib/schemas/import';
+export { ImportPreviewResponseSchema, ImportPreviewRowSchema } from '@/lib/schemas/import';
 
 

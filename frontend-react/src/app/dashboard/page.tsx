@@ -3,6 +3,7 @@
 import { MainLayout } from '@/components/layout/MainLayout';
 import { MetricCard } from '@/components/ui/MetricCard';
 import { useLeads } from '@/hooks/useLeads';
+import { useConversionRates, useTimeToContact, useAbandonedCount, useAtRiskCount } from '@/hooks/useAnalytics';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { formatDateTime } from '@/lib/utils';
 import {
@@ -16,9 +17,18 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import type { LeadStatus } from '@/types';
+import { AlertTriangle } from 'lucide-react';
+import { PendingStudentReports } from '@/components/dashboard/PendingStudentReports';
 
 export default function DashboardPage() {
-  const { data: leads, isLoading, error } = useLeads();
+  // Fetch all leads for dashboard metrics (no pagination)
+  const { data: leadsResponse, isLoading, error } = useLeads({ limit: 1000 }); // Large limit to get all leads for metrics
+  
+  // Fetch analytics data
+  const { data: conversionRatesData } = useConversionRates();
+  const { data: timeToContactData } = useTimeToContact();
+  const { data: abandonedData } = useAbandonedCount();
+  const { data: atRiskData } = useAtRiskCount();
 
   if (isLoading) {
     return (
@@ -41,8 +51,9 @@ export default function DashboardPage() {
     );
   }
 
-  const leadsData = leads || [];
-  const totalLeads = leadsData.length;
+  // Handle new paginated response structure
+  const leadsData = leadsResponse?.leads || [];
+  const totalLeads = leadsResponse?.total || 0;
   const newLeads = leadsData.filter((lead) => lead.status === 'New').length;
   const trialScheduled = leadsData.filter(
     (lead) => lead.status === 'Trial Scheduled'
@@ -54,6 +65,8 @@ export default function DashboardPage() {
     New: 0,
     Called: 0,
     'Trial Scheduled': 0,
+    'Trial Attended': 0,
+    'Nurture': 0,
     Joined: 0,
     'Dead/Not Interested': 0,
   };
@@ -83,6 +96,9 @@ export default function DashboardPage() {
           <p className="text-gray-600 mt-2">Monitor your leads and performance</p>
         </div>
 
+        {/* Student Success Section */}
+        <PendingStudentReports />
+
         {/* Metrics Cards */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
           <MetricCard title="Total Leads" value={totalLeads} icon="👥" />
@@ -98,6 +114,101 @@ export default function DashboardPage() {
             icon="📅"
           />
           <MetricCard title="Joined" value={joined} icon="✅" />
+          <MetricCard
+            title="Abandoned Leads"
+            value={abandonedData?.abandoned_leads_count || 0}
+            icon="👻"
+            delta="Not touched in > 48h"
+          />
+          <MetricCard
+            title="At-Risk Members"
+            value={atRiskData?.at_risk_leads_count || 0}
+            icon={<AlertTriangle className="h-8 w-8 text-red-500" />}
+            delta="10+ days inactive"
+            onClick={() => {
+              if (typeof window !== 'undefined') {
+                window.location.href = '/leads?filter=at-risk';
+              }
+            }}
+            className="border-2 border-red-300 hover:border-red-400"
+          />
+        </div>
+
+        {/* Operational Intelligence Metrics */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Average Time to Contact */}
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <h2 className="text-xl font-semibold text-gray-900 mb-4">
+              ⏱️ Average Time to Contact
+            </h2>
+            {timeToContactData?.average_hours !== null && timeToContactData?.average_hours !== undefined ? (
+              <div>
+                <div className={`text-4xl font-bold mb-2 ${
+                  timeToContactData.average_hours > 2 
+                    ? 'text-red-600' 
+                    : timeToContactData.average_hours > 1 
+                    ? 'text-yellow-600' 
+                    : 'text-green-600'
+                }`}>
+                  {timeToContactData.average_hours.toFixed(1)}h
+                </div>
+                <p className="text-sm text-gray-600">
+                  Time from lead creation to first contact
+                  {timeToContactData.average_hours > 2 && (
+                    <span className="block mt-1 text-red-600 font-medium">
+                      ⚠️ Above 2 hours - losing money on ads
+                    </span>
+                  )}
+                </p>
+              </div>
+            ) : (
+              <p className="text-gray-500">No data available yet</p>
+            )}
+          </div>
+
+          {/* Conversion Rates Summary */}
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <h2 className="text-xl font-semibold text-gray-900 mb-4">
+              📈 Key Conversion Rates
+            </h2>
+            {conversionRatesData?.conversion_rates && Object.keys(conversionRatesData.conversion_rates).length > 0 ? (
+              <div className="space-y-3">
+                {Object.entries(conversionRatesData.conversion_rates)
+                  .filter(([transition]) => 
+                    transition.includes('New->') || 
+                    transition.includes('Called->') || 
+                    transition.includes('Trial Scheduled->')
+                  )
+                  .slice(0, 3)
+                  .map(([transition, rate]) => {
+                    const [from, to] = transition.split('->');
+                    const percentage = (rate * 100).toFixed(1);
+                    return (
+                      <div key={transition} className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <div className="text-sm font-medium text-gray-700">
+                            {from} → {to}
+                          </div>
+                          <div className="w-full bg-gray-200 rounded-full h-2 mt-1">
+                            <div
+                              className={`h-2 rounded-full ${
+                                rate >= 0.5 ? 'bg-green-600' : rate >= 0.3 ? 'bg-yellow-600' : 'bg-red-600'
+                              }`}
+                              style={{ width: `${Math.min(percentage, 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                        <div className="ml-4 text-lg font-semibold text-gray-900">
+                          {percentage}%
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            ) : (
+              <p className="text-gray-500">No conversion data available yet</p>
+            )}
+          </div>
         </div>
 
         {leadsData.length > 0 ? (
@@ -167,5 +278,3 @@ export default function DashboardPage() {
     </MainLayout>
   );
 }
-
-

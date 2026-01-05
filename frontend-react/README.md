@@ -66,7 +66,6 @@ frontend-react/
 
 For detailed setup instructions, see [SETUP.md](./SETUP.md)
 
-For migration guide from Streamlit, see [../STREAMLIT_TO_REACT_MIGRATION.md](../STREAMLIT_TO_REACT_MIGRATION.md)
 
 ## 🔧 Available Scripts
 

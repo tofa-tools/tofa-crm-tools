@@ -18,7 +18,7 @@ export default function UsersPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [role, setRole] = useState('team_member');
+  const [role, setRole] = useState('regular_user');
   const [selectedCenters, setSelectedCenters] = useState<number[]>([]);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(true);
@@ -42,6 +42,12 @@ export default function UsersPage() {
       return;
     }
 
+    // Validate: Coaches must be assigned to at least one center
+    if (role === 'coach' && selectedCenters.length === 0) {
+      setError('Coaches must be assigned to at least one center');
+      return;
+    }
+
     try {
       await createUserMutation.mutateAsync({
         email,
@@ -54,7 +60,7 @@ export default function UsersPage() {
       setEmail('');
       setPassword('');
       setFullName('');
-      setRole('team_member');
+      setRole('regular_user');
       setSelectedCenters([]);
       setError('');
       alert('✅ User created successfully!');
@@ -152,17 +158,21 @@ export default function UsersPage() {
                     onChange={(e) => setRole(e.target.value)}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
                   >
-                    <option value="team_member">Team Member</option>
                     <option value="team_lead">Team Lead</option>
+                    <option value="regular_user">Regular User</option>
                     <option value="observer">Observer</option>
+                    <option value="coach">Coach</option>
                   </select>
                 </div>
               </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  🏢 Assign Centers
+                  🏢 Assign Centers {role === 'coach' && <span className="text-red-500">*</span>}
                 </label>
+                {role === 'coach' && selectedCenters.length === 0 && (
+                  <p className="text-sm text-red-600 mb-2">Coaches must be assigned to at least one center</p>
+                )}
                 <div className="flex flex-wrap gap-2">
                   {centers?.map((center) => (
                     <label

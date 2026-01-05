@@ -27,6 +27,11 @@ const statusConfig: Record<LeadStatus, { bg: string; text: string; icon: string 
     text: 'text-emerald-800',
     icon: '✅',
   },
+  'Nurture': {
+    bg: 'bg-purple-100',
+    text: 'text-purple-800',
+    icon: '🌱',
+  },
   'Dead/Not Interested': {
     bg: 'bg-red-100',
     text: 'text-red-800',

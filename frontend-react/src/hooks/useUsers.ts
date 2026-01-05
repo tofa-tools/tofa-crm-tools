@@ -1,11 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { usersAPI } from '@/lib/api';
-import type { User, UserCreate } from '@/types';
+import type { UserCreate } from '@/types';
 
 export function useUsers() {
   return useQuery({
     queryKey: ['users'],
     queryFn: () => usersAPI.getUsers(),
+    staleTime: 5 * 60 * 1000, // 5 minutes
   });
 }
 
@@ -19,5 +20,3 @@ export function useCreateUser() {
     },
   });
 }
-
-

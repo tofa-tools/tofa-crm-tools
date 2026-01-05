@@ -15,12 +15,12 @@ fastapi
 uvicorn
 sqlmodel
 psycopg2-binary
-streamlit
 pandas
 openpyxl
 python-multipart
 python-jose[cryptography]
 passlib[bcrypt]
+python-dotenv
 requests
 """
 
@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS "usercenterlink" (
 -- 4. Create Leads Table
 CREATE TABLE IF NOT EXISTS "lead" (
     id SERIAL PRIMARY KEY,
-    created_time TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    created_time TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT (now() AT TIME ZONE 'utc'),
     player_name VARCHAR NOT NULL,
     player_age_category VARCHAR NOT NULL,
     phone VARCHAR NOT NULL,
@@ -409,149 +409,6 @@ def read_centers(db: Session = Depends(get_session)):
     return db.exec(select(Center)).all()
 """
 
-# 8. frontend/app.py
-file_contents["frontend/app.py"] = """
-import streamlit as st
-import requests
-import pandas as pd
-from datetime import datetime
-
-# CONFIG
-API_URL = "http://127.0.0.1:8000"
-
-st.set_page_config(page_title="TOFA CRM", layout="wide")
-
-def login():
-    st.title("TOFA Academy CRM")
-    col1, col2 = st.columns([1,2])
-    with col1:
-        st.subheader("Login")
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-        if st.button("Login"):
-            try:
-                res = requests.post(f"{API_URL}/token", data={"username": email, "password": password})
-                if res.status_code == 200:
-                    data = res.json()
-                    st.session_state['token'] = data['access_token']
-                    st.session_state['role'] = data['role']
-                    st.session_state['user_email'] = email
-                    st.success("Login Successful!")
-                    st.rerun()
-                else:
-                    st.error("Invalid credentials. (Default: admin@tofa.com / admin123)")
-            except Exception as e:
-                st.error(f"Cannot connect to backend. Make sure uvicorn is running! {e}")
-
-def authenticated_app():
-    st.sidebar.title(f"User: {st.session_state['user_email']}")
-    st.sidebar.caption(f"Role: {st.session_state['role']}")
-    
-    menu_options = ["Dashboard", "My Leads"]
-    if st.session_state['role'] == 'team_lead':
-        menu_options.extend(["Manage Centers", "Import Data"])
-        
-    choice = st.sidebar.radio("Menu", menu_options)
-    
-    headers = {"Authorization": f"Bearer {st.session_state['token']}"}
-
-    if choice == "Dashboard":
-        st.header("Academy Overview")
-        st.info("Welcome to the Football Academy CRM.")
-        st.write("Use the sidebar to navigate.")
-
-    elif choice == "Manage Centers":
-        st.header("Manage Centers")
-        with st.expander("Add New Center"):
-            with st.form("new_center"):
-                d_name = st.text_input("Display Name (e.g. TOFA Tellapur)")
-                m_tag = st.text_input("Meta Tag (COPY EXACTLY from Excel)")
-                city = st.text_input("City")
-                loc = st.text_input("Location")
-                submitted = st.form_submit_button("Create Center")
-                if submitted:
-                    payload = {"display_name": d_name, "meta_tag_name": m_tag, "city": city, "location": loc}
-                    res = requests.post(f"{API_URL}/centers/", json=payload, headers=headers)
-                    if res.status_code == 200:
-                        st.success("Center Created")
-                    else:
-                        st.error(f"Error: {res.text}")
-
-        st.subheader("Existing Centers")
-        try:
-            centers = requests.get(f"{API_URL}/centers/", headers=headers).json()
-            if centers:
-                st.dataframe(pd.DataFrame(centers))
-        except:
-            st.error("Could not fetch centers.")
-
-    elif choice == "Import Data":
-        st.header("Import Leads from Excel")
-        uploaded_file = st.file_uploader("Upload Excel File", type=['xlsx', 'xls'])
-        
-        if uploaded_file and st.button("Process Import"):
-            files = {"file": uploaded_file.getvalue()}
-            res = requests.post(f"{API_URL}/leads/upload/", files={"file": uploaded_file}, headers=headers)
-            
-            data = res.json()
-            if data.get("status") == "error":
-                st.error(data['message'])
-                st.warning("Please add these centers in 'Manage Centers' tab first:")
-                st.code(data['unknown_tags'])
-            else:
-                st.success(f"Successfully added {data['leads_added']} leads!")
-
-    elif choice == "My Leads":
-        st.header("Lead Management")
-        leads = requests.get(f"{API_URL}/leads/my_leads", headers=headers).json()
-        
-        if not leads:
-            st.warning("No leads found.")
-        else:
-            df = pd.DataFrame(leads)
-            
-            # Filters
-            status_filter = st.multiselect("Filter by Status", df['status'].unique(), default=df['status'].unique())
-            df_filtered = df[df['status'].isin(status_filter)]
-            
-            st.dataframe(df_filtered[['player_name', 'phone', 'status', 'next_followup_date', 'player_age_category']])
-            
-            st.divider()
-            st.subheader("Update Lead")
-            
-            lead_options = df_filtered.to_dict('records')
-            selected_lead = st.selectbox("Select Lead to Call/Update", lead_options, format_func=lambda x: f"{x['player_name']} ({x['status']})")
-            
-            if selected_lead:
-                st.write(f"**Phone:** {selected_lead['phone']} | **Center ID:** {selected_lead['center_id']}")
-                
-                with st.form("update_form"):
-                    new_status = st.selectbox("New Status", ["New", "Called", "Trial Scheduled", "Joined", "Dead/Not Interested"], index=0)
-                    next_followup = st.date_input("Next Follow Up Date")
-                    comment = st.text_area("Add Call Notes")
-                    
-                    if st.form_submit_button("Update Status"):
-                        payload = {
-                            "status": new_status, 
-                            "next_date": next_followup.isoformat(), 
-                            "comment": comment
-                        }
-                        res = requests.put(f"{API_URL}/leads/{selected_lead['id']}", params=payload, headers=headers)
-                        if res.status_code == 200:
-                            st.success("Lead Updated!")
-                            st.rerun()
-                        else:
-                            st.error("Failed to update")
-
-    if st.sidebar.button("Logout"):
-        del st.session_state['token']
-        st.rerun()
-
-if 'token' not in st.session_state:
-    login()
-else:
-    authenticated_app()
-"""
 
 file_contents["backend/__init__.py"] = ""
 
@@ -574,7 +431,7 @@ def create_project():
     print("2. SUPABASE:     Go to Supabase -> SQL Editor -> Copy contents of 'supabase_schema.sql' -> Run.")
     print("3. ENV CONFIG:   Open .env file -> Paste your Supabase Connection String.")
     print("4. RUN BACKEND:  uvicorn backend.main:app --reload")
-    print("5. RUN FRONTEND: streamlit run frontend/app.py")
+    print("5. RUN FRONTEND: cd frontend-react && npm run dev")
 
 if __name__ == "__main__":
     create_project()

@@ -18,6 +18,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  const refreshUser = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        return; // No token, can't refresh
+      }
+      
+      const userData = await authAPI.getCurrentUser();
+      // Convert User type to AuthUser type (match what login returns)
+      // AuthUser only has email and role, not full_name
+      const authUser: AuthUser = {
+        email: userData.email,
+        role: userData.role,
+      };
+      
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('user', JSON.stringify(authUser));
+      }
+      setUser(authUser);
+    } catch (error) {
+      console.error('Error refreshing user:', error);
+      // If refresh fails, logout user
+      logout();
+    }
+  };
+
   useEffect(() => {
     // Restore user from localStorage on mount
     if (typeof window !== 'undefined') {
@@ -27,6 +53,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (storedUser && token) {
         try {
           setUser(JSON.parse(storedUser));
+          // Refresh user data from backend to ensure it's up to date
+          refreshUser();
         } catch (error) {
           console.error('Error parsing stored user:', error);
           localStorage.removeItem('user');
@@ -35,6 +63,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       setIsLoading(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const login = async (email: string, password: string) => {
@@ -68,6 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         user,
         login,
         logout,
+        refreshUser,
         isAuthenticated: !!user,
         isLoading,
       }}

@@ -39,7 +39,7 @@ def create_user(
         email: User email
         password: Plain text password (will be hashed)
         full_name: User's full name
-        role: User role (team_member, team_lead, observer)
+        role: User role (team_lead, regular_user, observer, coach)
         center_ids: List of center IDs to assign user to
         
     Returns:
@@ -63,6 +63,10 @@ def create_user(
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+    
+    # Validate: Coaches must be assigned to at least one center
+    if role == "coach" and not center_ids:
+        raise ValueError("Coaches must be assigned to at least one center")
     
     # Assign centers
     for center_id in center_ids:

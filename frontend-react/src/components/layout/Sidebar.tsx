@@ -14,7 +14,16 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: '🏠' },
+  // Check-In for coaches (first item for them)
+  { label: 'Check-In', href: '/check-in', icon: '✅', roles: ['coach'] },
+  { label: 'Command Center', href: '/command-center', icon: '🚀' },
   { label: 'My Leads', href: '/leads', icon: '👥' },
+  {
+    label: 'Batches',
+    href: '/batches',
+    icon: '📅',
+    roles: ['team_lead'],
+  },
   {
     label: 'Manage Centers',
     href: '/centers',

@@ -2,12 +2,13 @@
 
 import { ReactNode, useEffect } from 'react';
 import { Sidebar } from './Sidebar';
+import { BottomNavigation } from './BottomNavigation';
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import { useSidebar } from '@/context/SidebarContext';
 
 export function MainLayout({ children }: { children: ReactNode }) {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { isAuthenticated, isLoading, user } = useAuth();
   const router = useRouter();
   const { isCollapsed, toggleCollapse } = useSidebar();
 
@@ -32,6 +33,19 @@ export function MainLayout({ children }: { children: ReactNode }) {
     return null;
   }
 
+  // Coach layout: Mobile Webview style with bottom navigation
+  if (user?.role === 'coach') {
+    return (
+      <div className="min-h-screen bg-gray-50 pb-16">
+        <main className="w-full overflow-auto">
+          {children}
+        </main>
+        <BottomNavigation />
+      </div>
+    );
+  }
+
+  // Desktop layout: Sidebar for team_lead and regular_user
   return (
     <div className="flex min-h-screen bg-gray-50">
       <Sidebar isCollapsed={isCollapsed} onToggleCollapse={toggleCollapse} />

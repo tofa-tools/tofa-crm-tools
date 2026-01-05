@@ -1,91 +1,191 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { StatusBadge } from '@/components/ui/StatusBadge';
-import { useLeads, useUpdateLead } from '@/hooks/useLeads';
+import { LeadScore } from '@/components/ui/LeadScore';
+import { BulkActionsToolbar } from '@/components/leads/BulkActionsToolbar';
+import { PlannerPane } from '@/components/leads/PlannerPane';
+import { ReferralModal } from '@/components/leads/ReferralModal';
+import { AgeMigrationAlert } from '@/components/leads/AgeMigrationAlert';
+import { SkillReportModal } from '@/components/leads/SkillReportModal';
+import { LeadUpdateModal } from '@/components/leads/LeadUpdateModal';
+import { useLeads, usePrefetchNextPage } from '@/hooks/useLeads';
+import { useBatches } from '@/hooks/useBatches';
+import { useCenters } from '@/hooks/useCenters';
+import { useAuth } from '@/context/AuthContext';
 import { formatDate } from '@/lib/utils';
+import { PAGINATION_OPTIONS } from '@/lib/config/crm';
 import type { Lead, LeadStatus } from '@/types';
+import { StagingLeadsModal } from '@/components/leads/StagingLeadsModal';
+import { stagingAPI } from '@/lib/api';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Search, Calendar, Ghost, ArrowUp, ArrowDown, ChevronUp, ChevronDown } from 'lucide-react';
 
 export default function LeadsPage() {
-  const { data: leads, isLoading } = useLeads();
-  const updateLeadMutation = useUpdateLead();
-  const [statusFilter, setStatusFilter] = useState<LeadStatus[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
-  const [updateStatus, setUpdateStatus] = useState<LeadStatus>('New');
-  const [updateNextDate, setUpdateNextDate] = useState('');
-  const [updateComment, setUpdateComment] = useState('');
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
 
-  const leadsData = leads || [];
+  // --- URL & Pagination Params ---
+  const pageSize = parseInt(searchParams.get('pageSize') || String(PAGINATION_OPTIONS.DEFAULT_SIZE), 10);
+  const currentPage = parseInt(searchParams.get('page') || '1', 10);
+  const statusFilter = searchParams.get('status')?.split(',').filter(Boolean) as LeadStatus[] || [];
+  const searchTerm = searchParams.get('search') || '';
+  const sortBy = searchParams.get('sortBy') || 'status';
+  const sortDirection = searchParams.get('sortDirection') || 'asc'; // 'asc' or 'desc'
+  const nextFollowupDateFilter = searchParams.get('next_follow_up_date') || null;
+  const lossReasonFilter = searchParams.get('loss_reason') || null;
+  const offset = (currentPage - 1) * pageSize;
 
-  // Initialize filters with all statuses
-  const availableStatuses = useMemo(() => {
-    const statuses = new Set<LeadStatus>(leadsData.map((lead) => lead.status));
-    return Array.from(statuses);
-  }, [leadsData]);
+  // --- UI State ---
+  const [isPlannerOpen, setIsPlannerOpen] = useState(false);
+  const [expandedLeadId, setExpandedLeadId] = useState<number | null>(null);
+  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<number>>(new Set());
+  const [showReferralModal, setShowReferralModal] = useState(false);
+  const [joinedLeadId, setJoinedLeadId] = useState<number | null>(null);
+  const [joinedPlayerName, setJoinedPlayerName] = useState<string>('');
+  const [showSkillReportModal, setShowSkillReportModal] = useState(false);
+  const [showStagingModal, setShowStagingModal] = useState(false);
+  const [searchInputValue, setSearchInputValue] = useState(searchTerm);
 
-  // Initialize statusFilter on first load
-  useMemo(() => {
-    if (statusFilter.length === 0 && availableStatuses.length > 0) {
-      setStatusFilter(availableStatuses);
-    }
-  }, [availableStatuses, statusFilter.length]);
-
-  // Filter leads
-  const filteredLeads = useMemo(() => {
-    let filtered = leadsData;
-
-    if (statusFilter.length > 0) {
-      filtered = filtered.filter((lead) => statusFilter.includes(lead.status));
-    }
-
-    if (searchTerm) {
-      filtered = filtered.filter((lead) =>
-        lead.player_name.toLowerCase().includes(searchTerm.toLowerCase())
-      );
-    }
-
-    return filtered;
-  }, [leadsData, statusFilter, searchTerm]);
-
-  const handleUpdateLead = async () => {
-    if (!selectedLead) return;
-
-    try {
-      await updateLeadMutation.mutateAsync({
-        leadId: selectedLead.id,
-        update: {
-          status: updateStatus,
-          next_date: updateNextDate || null,
-          comment: updateComment || null,
-        },
-      });
-      // Reset form
-      setSelectedLead(null);
-      setUpdateStatus('New');
-      setUpdateNextDate('');
-      setUpdateComment('');
-      alert('✅ Lead updated successfully!');
-    } catch (error) {
-      alert('❌ Failed to update lead');
-    }
+  // --- Data Fetching ---
+  // Backend only supports 'created_time', 'freshness', or 'score'
+  // For 'status' sorting, we use 'created_time' as backend sort and handle status sorting on frontend
+  const backendSortBy = sortBy === 'status' ? 'created_time' : sortBy;
+  
+  const queryParams = {
+    limit: pageSize,
+    offset,
+    sort_by: backendSortBy,
+    ...(statusFilter.length === 1 && { status: statusFilter[0] }),
+    ...(searchTerm && { search: searchTerm }),
+    ...(nextFollowupDateFilter && { next_follow_up_date: nextFollowupDateFilter }),
+    ...(lossReasonFilter && { loss_reason: lossReasonFilter }),
   };
 
-  const handleStatusFilterChange = (status: LeadStatus, checked: boolean) => {
-    if (checked) {
-      setStatusFilter([...statusFilter, status]);
+  const { data: leadsResponse, isLoading } = useLeads(queryParams);
+  
+  const { data: stagingLeadsData } = useQuery({
+    queryKey: ['stagingLeads'],
+    queryFn: () => stagingAPI.getStagingLeads(),
+    enabled: user?.role === 'team_lead' || user?.role === 'regular_user',
+  });
+
+  const prefetchNextPage = usePrefetchNextPage(queryParams, pageSize);
+
+  const leadsData = leadsResponse?.leads || [];
+  const totalLeads = leadsResponse?.total || 0;
+  const totalPages = Math.ceil(totalLeads / pageSize);
+  const stagingLeads = stagingLeadsData || [];
+  
+  const { data: batchesData } = useBatches();
+  const allBatches = batchesData || [];
+
+  const selectedLead = useMemo(() => 
+    leadsData.find((l: Lead) => l.id === expandedLeadId) || null
+  , [expandedLeadId, leadsData]);
+
+
+  // --- Actions & Helpers ---
+  const updateURLParams = useCallback((updates: Record<string, string | number | null>) => {
+    const params = new URLSearchParams(searchParams.toString());
+    Object.entries(updates).forEach(([key, value]) => {
+      if (!value && value !== 'asc' && value !== 'desc') params.delete(key);
+      else params.set(key, String(value));
+    });
+    if (updates.status !== undefined || updates.search !== undefined || updates.sortBy !== undefined) params.set('page', '1');
+    router.push(`/leads?${params.toString()}`);
+  }, [router, searchParams]);
+
+  const handleJoined = (leadId: number, playerName: string) => {
+    setJoinedLeadId(leadId);
+    setJoinedPlayerName(playerName);
+    setShowReferralModal(true);
+  };
+
+  // Handle column header click for sorting
+  const handleSort = useCallback((column: string) => {
+    if (sortBy === column) {
+      // Toggle direction if same column
+      const newDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+      updateURLParams({ sortBy: column, sortDirection: newDirection });
     } else {
-      setStatusFilter(statusFilter.filter((s) => s !== status));
+      // New column, default to ascending
+      updateURLParams({ sortBy: column, sortDirection: 'asc' });
     }
-  };
+  }, [sortBy, sortDirection, updateURLParams]);
 
-  if (isLoading) {
+  // --- Frontend Sorting Logic ---
+  const sortedLeadsData = useMemo(() => {
+    if (!leadsData || leadsData.length === 0) return [];
+    
+    const sorted = [...leadsData];
+    const statusOrder: Record<string, number> = { 
+      'New': 0, 
+      'Called': 1, 
+      'Trial Scheduled': 2, 
+      'Trial Attended': 3, 
+      'Joined': 4, 
+      'Nurture': 5, 
+      'Dead/Not Interested': 6 
+    };
+    
+    const isAsc = sortDirection === 'asc';
+    
+    if (sortBy === 'status') {
+      sorted.sort((a, b) => {
+        const aOrder = statusOrder[a.status] ?? 99;
+        const bOrder = statusOrder[b.status] ?? 99;
+        return isAsc ? aOrder - bOrder : bOrder - aOrder;
+      });
+    } else if (sortBy === 'score') {
+      sorted.sort((a, b) => {
+        const aScore = a.score ?? 0;
+        const bScore = b.score ?? 0;
+        return isAsc ? aScore - bScore : bScore - aScore;
+      });
+    } else if (sortBy === 'created_time') {
+      sorted.sort((a, b) => {
+        const aTime = a.created_time ? new Date(a.created_time).getTime() : 0;
+        const bTime = b.created_time ? new Date(b.created_time).getTime() : 0;
+        return isAsc ? aTime - bTime : bTime - aTime;
+      });
+    } else if (sortBy === 'player_name') {
+      sorted.sort((a, b) => {
+        const aName = (a.player_name || '').toLowerCase();
+        const bName = (b.player_name || '').toLowerCase();
+        return isAsc ? aName.localeCompare(bName) : bName.localeCompare(aName);
+      });
+    } else if (sortBy === 'next_followup_date') {
+      sorted.sort((a, b) => {
+        const aDate = a.next_followup_date ? new Date(a.next_followup_date).getTime() : 0;
+        const bDate = b.next_followup_date ? new Date(b.next_followup_date).getTime() : 0;
+        return isAsc ? aDate - bDate : bDate - aDate;
+      });
+    }
+    
+    return sorted;
+  }, [leadsData, sortBy, sortDirection]);
+
+  // --- Effects ---
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      if (searchInputValue !== searchTerm) updateURLParams({ search: searchInputValue || null });
+    }, 300);
+    return () => clearTimeout(timeoutId);
+  }, [searchInputValue, searchTerm, updateURLParams]);
+
+
+  // --- Render ---
+  if (isLoading && !leadsData.length) {
     return (
       <MainLayout>
-        <div className="text-center py-12">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading leads...</p>
+        <div className="flex flex-col items-center justify-center min-h-[400px]">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+          <p className="mt-4 text-gray-600">Loading Leads...</p>
         </div>
       </MainLayout>
     );
@@ -93,220 +193,205 @@ export default function LeadsPage() {
 
   return (
     <MainLayout>
-      <div className="space-y-8">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">👥 Lead Management</h1>
-          <p className="text-gray-600 mt-2">View and manage your leads</p>
+      <div className="space-y-6">
+        {/* Header Section */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">👥 Lead Management</h1>
+            <p className="text-gray-500 mt-1">Managing {totalLeads} records</p>
+          </div>
+          <button 
+            onClick={() => setIsPlannerOpen(!isPlannerOpen)} 
+            className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl shadow-sm hover:bg-gray-50 font-medium"
+          >
+            <Calendar className="w-4 h-4" />
+            {isPlannerOpen ? 'Close Planner' : 'Open Planner'}
+          </button>
         </div>
 
-        {leadsData.length === 0 ? (
-          <div className="bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded-lg">
-            📭 No leads found.
+        {/* Staging Banner (Restored) */}
+        {stagingLeads.length > 0 && (user?.role === 'team_lead' || user?.role === 'regular_user') && (
+          <div className="bg-gradient-to-r from-indigo-600 to-violet-700 rounded-2xl p-5 text-white shadow-lg flex justify-between items-center">
+            <div className="flex items-center gap-4">
+              <Ghost className="w-8 h-8 opacity-80" />
+              <div>
+                <h3 className="text-lg font-bold">New Field Leads ({stagingLeads.length})</h3>
+                <p className="text-indigo-100 text-sm">Review walk-ins from coaches.</p>
+              </div>
+            </div>
+            <button onClick={() => setShowStagingModal(true)} className="px-6 py-2 bg-white text-indigo-700 font-bold rounded-lg shadow-sm hover:scale-105 transition-transform">Process</button>
           </div>
-        ) : (
-          <>
-            {/* Filters */}
-            <div className="bg-white rounded-lg shadow-md p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    🔍 Filter by Status
-                  </label>
-                  <div className="flex flex-wrap gap-2">
-                    {availableStatuses.map((status) => (
-                      <label
-                        key={status}
-                        className="flex items-center gap-2 cursor-pointer"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={statusFilter.includes(status)}
-                          onChange={(e) =>
-                            handleStatusFilterChange(status, e.target.checked)
-                          }
-                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                        />
-                        <StatusBadge status={status} />
-                      </label>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    🔎 Search by Name
-                  </label>
-                  <input
-                    type="text"
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    placeholder="Type to search..."
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                  />
-                </div>
-              </div>
-            </div>
+        )}
 
-            {/* Leads Table */}
-            {filteredLeads.length > 0 ? (
-              <div className="bg-white rounded-lg shadow-md overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Player Name
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Phone
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Status
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Next Follow-up
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Age Category
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {filteredLeads.map((lead) => (
-                        <tr
-                          key={lead.id}
-                          className="hover:bg-gray-50 cursor-pointer"
-                          onClick={() => setSelectedLead(lead)}
-                        >
-                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                            {lead.player_name}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {lead.phone}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <StatusBadge status={lead.status} />
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {formatDate(lead.next_followup_date)}
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            {lead.player_age_category}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            ) : (
-              <div className="bg-blue-50 border border-blue-200 text-blue-700 px-4 py-3 rounded-lg">
-                No leads match your filters.
-              </div>
-            )}
+        {/* Filter Toolbar (Restored) */}
+        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-wrap gap-4 items-center">
+          <div className="relative flex-1 min-w-[300px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+            <input
+              type="text"
+              value={searchInputValue}
+              onChange={(e) => setSearchInputValue(e.target.value)}
+              placeholder="Search students..."
+              className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+            />
+          </div>
+          <select 
+            value={sortBy} 
+            onChange={(e) => updateURLParams({ sortBy: e.target.value })}
+            className="p-2 border rounded-xl bg-gray-50 text-sm font-medium outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="status">Sort by Status</option>
+            <option value="created_time">Sort by Date</option>
+            <option value="score">Sort by Score</option>
+          </select>
+          <select 
+            value={pageSize} 
+            onChange={(e) => updateURLParams({ pageSize: e.target.value, page: 1 })}
+            className="p-2 border rounded-xl bg-gray-50 text-sm font-medium"
+          >
+            {[25, 50, 100].map(size => <option key={size} value={size}>{size} per page</option>)}
+          </select>
+        </div>
 
-            {/* Update Lead Section */}
-            <div className="bg-white rounded-lg shadow-md p-6">
-              <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                ✏️ Update Lead
-              </h2>
+        <BulkActionsToolbar selectedLeadIds={Array.from(selectedLeadIds)} onClearSelection={() => setSelectedLeadIds(new Set())} />
 
-              {selectedLead ? (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
-                    <div>
-                      <p className="text-sm text-gray-600">👤 Name</p>
-                      <p className="font-medium text-gray-900">
-                        {selectedLead.player_name}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-600">📞 Phone</p>
-                      <p className="font-medium text-gray-900">
-                        {selectedLead.phone}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-600">🏢 Center ID</p>
-                      <p className="font-medium text-gray-900">
-                        {selectedLead.center_id}
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-600">📅 Age Category</p>
-                      <p className="font-medium text-gray-900">
-                        {selectedLead.player_age_category || 'N/A'}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        New Status *
-                      </label>
-                      <select
-                        value={updateStatus}
-                        onChange={(e) =>
-                          setUpdateStatus(e.target.value as LeadStatus)
-                        }
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                      >
-                        <option value="New">New</option>
-                        <option value="Called">Called</option>
-                        <option value="Trial Scheduled">Trial Scheduled</option>
-                        <option value="Joined">Joined</option>
-                        <option value="Dead/Not Interested">
-                          Dead/Not Interested
-                        </option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Next Follow Up Date
-                      </label>
-                      <input
-                        type="date"
-                        value={updateNextDate}
-                        onChange={(e) => setUpdateNextDate(e.target.value)}
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      📝 Add Call Notes
-                    </label>
-                    <textarea
-                      value={updateComment}
-                      onChange={(e) => setUpdateComment(e.target.value)}
-                      placeholder="Enter notes from your call..."
-                      rows={4}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                    />
-                  </div>
-
-                  <button
-                    onClick={handleUpdateLead}
-                    disabled={updateLeadMutation.isPending}
-                    className="w-full bg-gradient-primary text-white font-semibold py-3 px-4 rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
+        {/* Leads Table (100% Feature Restored) */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50/50">
+                <tr className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                  <th className="px-6 py-4 w-10">
+                    <input type="checkbox" className="rounded border-gray-300 text-indigo-600" onChange={(e) => {
+                      if (e.target.checked) setSelectedLeadIds(new Set(sortedLeadsData.map((l: Lead) => l.id)));
+                      else setSelectedLeadIds(new Set());
+                    }} />
+                  </th>
+                  <th 
+                    className="px-6 py-4 text-left cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                    onClick={() => handleSort('player_name')}
                   >
-                    {updateLeadMutation.isPending
-                      ? 'Updating...'
-                      : '💾 Update Status'}
-                  </button>
-                </div>
-              ) : (
-                <div className="text-center py-8 text-gray-500">
-                  Select a lead from the table above to update
-                </div>
-              )}
-            </div>
-          </>
+                    <div className="flex items-center gap-2">
+                      <span>Player</span>
+                      {sortBy === 'player_name' && (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      )}
+                    </div>
+                  </th>
+                  <th className="px-6 py-4 text-left">Contact</th>
+                  <th 
+                    className="px-6 py-4 text-left cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                    onClick={() => handleSort('score')}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>Score</span>
+                      {sortBy === 'score' && (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      )}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-6 py-4 text-left cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                    onClick={() => handleSort('status')}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>Status</span>
+                      {sortBy === 'status' && (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      )}
+                    </div>
+                  </th>
+                  <th className="px-6 py-4 text-left">Age</th>
+                  <th 
+                    className="px-6 py-4 text-left cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                    onClick={() => handleSort('created_time')}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>Created Time</span>
+                      {sortBy === 'created_time' && (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      )}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-6 py-4 text-left cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                    onClick={() => handleSort('next_followup_date')}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span>Follow-up</span>
+                      {sortBy === 'next_followup_date' && (
+                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      )}
+                    </div>
+                  </th>
+                  <th className="px-6 py-4 text-left">Trial Batch</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100 bg-white">
+                {sortedLeadsData.length > 0 ? sortedLeadsData.map((lead: Lead) => (
+                  <tr key={lead.id} onClick={() => setExpandedLeadId(lead.id)} className="group hover:bg-indigo-50/30 cursor-pointer transition-colors">
+                    <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" checked={selectedLeadIds.has(lead.id)} onChange={() => {
+                        const next = new Set(selectedLeadIds);
+                        if (next.has(lead.id)) next.delete(lead.id); else next.add(lead.id);
+                        setSelectedLeadIds(next);
+                      }} className="rounded border-gray-300 text-indigo-600" />
+                    </td>
+                    <td className="px-6 py-4 text-sm font-bold text-gray-900">{lead.player_name}</td>
+                    <td className="px-6 py-4 text-sm text-gray-500">{user?.role === 'coach' ? '🔒 HIDDEN' : lead.phone || 'N/A'}</td>
+                    <td className="px-6 py-4"><LeadScore score={lead.score || 0} /></td>
+                    <td className="px-6 py-4"><StatusBadge status={lead.status} /></td>
+                    <td className="px-6 py-4">
+                       <div className="flex items-center gap-2 text-sm text-gray-600">
+                         {lead.player_age_category}
+                         <AgeMigrationAlert leadId={lead.id} currentCategory={lead.player_age_category} dateOfBirth={lead.date_of_birth} playerName={lead.player_name} onCategoryUpdated={() => queryClient.invalidateQueries({ queryKey: ['leads'] })} />
+                       </div>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(lead.created_time)}</td>
+                    <td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(lead.next_followup_date)}</td>
+                    <td className="px-6 py-4 text-sm text-gray-500 font-medium">
+                      {allBatches.find(b => b.id === lead.trial_batch_id)?.name || '—'}
+                    </td>
+                  </tr>
+                )) : (
+                  <tr><td colSpan={9} className="px-6 py-20 text-center text-gray-400 font-medium italic">No leads match your current search/filters.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Pagination Logic */}
+        {totalPages > 1 && (
+           <div className="flex items-center justify-between bg-white px-6 py-4 rounded-2xl border border-gray-100">
+              <button disabled={currentPage === 1} onClick={() => updateURLParams({ page: currentPage - 1 })} className="px-4 py-2 border rounded-xl text-sm font-bold disabled:opacity-30 hover:bg-gray-50">Previous</button>
+              <span className="text-sm font-bold text-gray-500 tracking-widest uppercase">Page {currentPage} of {totalPages}</span>
+              <button disabled={currentPage === totalPages} onClick={() => updateURLParams({ page: currentPage + 1 })} className="px-4 py-2 border rounded-xl text-sm font-bold disabled:opacity-30 hover:bg-gray-50">Next</button>
+           </div>
         )}
       </div>
+
+      {/* Planner Integration (Restored properly) */}
+      <PlannerPane
+        isOpen={isPlannerOpen}
+        onClose={() => setIsPlannerOpen(false)}
+        selectedDate={nextFollowupDateFilter}
+        onDateSelect={(d) => updateURLParams({ next_follow_up_date: d })}
+        onLeadClick={(id) => { setExpandedLeadId(id); if (window.innerWidth < 768) setIsPlannerOpen(false); }}
+      />
+
+      {/* Lead Update Modal */}
+      <LeadUpdateModal
+        lead={selectedLead}
+        isOpen={!!selectedLead}
+        onClose={() => setExpandedLeadId(null)}
+        onJoined={handleJoined}
+      />
+
+      {/* Overlays */}
+      {joinedLeadId && <ReferralModal isOpen={showReferralModal} onClose={() => setShowReferralModal(false)} playerName={joinedPlayerName} leadId={joinedLeadId} />}
+      <SkillReportModal isOpen={showSkillReportModal} onClose={() => setShowSkillReportModal(false)} leadId={selectedLead?.id || 0} playerName={selectedLead?.player_name || ""} existingReport={null} onSuccess={() => queryClient.invalidateQueries({ queryKey: ['leads'] })} />
+      <StagingLeadsModal isOpen={showStagingModal} onClose={() => setShowStagingModal(false)} onProcess={() => queryClient.invalidateQueries({ queryKey: ['leads'] })} />
     </MainLayout>
   );
 }
-
-
