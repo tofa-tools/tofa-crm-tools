@@ -16,6 +16,7 @@ export const UserSchema = z.object({
   email: z.string().email(),
   full_name: z.string().min(1),
   role: UserRoleSchema,
+  is_active: z.boolean().optional().default(true),
   // Optional fields that might come from backend
   center_ids: z.array(z.number()).optional(),
 });
@@ -35,4 +36,18 @@ export const UserCreateSchema = z.object({
 });
 
 export type UserCreate = z.infer<typeof UserCreateSchema>;
+
+/**
+ * User Update Schema
+ * Used for form validation when updating an existing user
+ */
+export const UserUpdateSchema = z.object({
+  full_name: z.string().min(1, 'Full name is required').optional(),
+  role: UserRoleSchema.optional(),
+  is_active: z.boolean().optional(),
+  password: z.string().min(8, 'Password must be at least 8 characters').optional().or(z.literal('')),
+  center_ids: z.array(z.number()).optional(),
+});
+
+export type UserUpdate = z.infer<typeof UserUpdateSchema>;
 

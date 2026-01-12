@@ -6,11 +6,16 @@ import { MainLayout } from '@/components/layout/MainLayout';
 import { useAuth } from '@/context/AuthContext';
 import { useCoachBatches } from '@/hooks/useBatches';
 import { useRecordAttendance } from '@/hooks/useAttendance';
+import { attendanceAPI } from '@/lib/api';
 import { useLeads } from '@/hooks/useLeads';
+import { useStudents } from '@/hooks/useStudents';
 import { useQueryClient } from '@tanstack/react-query';
-import { Search, ArrowLeft, CheckCircle2, Star } from 'lucide-react';
+import { Search, ArrowLeft, CheckCircle2, PhoneCall, BarChart3, Clock, Users } from 'lucide-react';
+import Image from 'next/image';
 import toast from 'react-hot-toast';
-import { SkillRatingForm } from '@/components/coach/SkillRatingForm';
+import { SkillReportModal } from '@/components/leads/SkillReportModal';
+import { studentsAPI } from '@/lib/api';
+import { EMERGENCY_SUPPORT_CONFIG } from '@/lib/config/crm';
 
 export default function CheckInPage() {
   const { user } = useAuth();
@@ -23,47 +28,153 @@ export default function CheckInPage() {
   
   const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedLeadForRating, setSelectedLeadForRating] = useState<{ id: number; name: string } | null>(null);
+  const [selectedStudentForSkillReport, setSelectedStudentForSkillReport] = useState<{ leadId: number; name: string; studentId?: number } | null>(null);
+  const [milestoneData, setMilestoneData] = useState<Record<number, any>>({});
+  const [attendanceHistoryData, setAttendanceHistoryData] = useState<Record<number, any>>({});
   
   // Fetch coach's batches
   const { data: coachBatchesData, isLoading: batchesLoading } = useCoachBatches();
   const coachBatches = coachBatchesData?.batches || [];
   
-  // Auto-select batch from URL parameter
+  // Phase 3: Auto-select batch from URL parameter or localStorage
   useEffect(() => {
     if (urlBatchId && !selectedBatchId) {
       const batchId = parseInt(urlBatchId, 10);
       if (!isNaN(batchId) && coachBatches.some(b => b.id === batchId)) {
         setSelectedBatchId(batchId);
+        // Save to localStorage
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('lastSelectedBatchId', String(batchId));
+        }
+      }
+    } else if (!urlBatchId && !selectedBatchId && coachBatches.length > 0) {
+      // Check localStorage for last selected batch
+      if (typeof window !== 'undefined') {
+        const lastBatchId = localStorage.getItem('lastSelectedBatchId');
+        if (lastBatchId) {
+          const batchId = parseInt(lastBatchId, 10);
+          if (!isNaN(batchId) && coachBatches.some(b => b.id === batchId)) {
+            setSelectedBatchId(batchId);
+            // Update URL without reload
+            router.push(`/check-in?batchId=${batchId}`, { scroll: false });
+          }
+        }
       }
     }
-  }, [urlBatchId, selectedBatchId, coachBatches]);
+  }, [urlBatchId, selectedBatchId, coachBatches, router]);
   
-  // Fetch all leads (coaches only see their batch leads via backend filtering)
+  // Fetch all leads (for trial students)
   const { data: leadsResponse, isLoading: leadsLoading } = useLeads({
     limit: 1000, // Large limit for check-in
   });
   
-  const allLeads = leadsResponse?.leads || [];
+  // Fetch all students (for active students)
+  const { data: studentsData, isLoading: studentsLoading } = useStudents({
+    is_active: true,
+  });
   
-  // Filter leads for selected batch
-  const batchLeads = useMemo(() => {
+  const allLeads = leadsResponse?.leads || [];
+  const allStudents = studentsData || [];
+  
+  // Combine students and leads for selected batch
+  const batchParticipants = useMemo(() => {
     if (!selectedBatchId) return [];
     
-    return allLeads.filter(
-      lead => lead.trial_batch_id === selectedBatchId || lead.permanent_batch_id === selectedBatchId
-    );
-  }, [allLeads, selectedBatchId]);
-  
+    // Get trial leads assigned to this batch
+    const trialLeads = allLeads
+      .filter(lead => lead.trial_batch_id === selectedBatchId && lead.status === 'Trial Scheduled')
+      .map(lead => ({
+        id: lead.id,
+        name: lead.player_name,
+        ageCategory: lead.player_age_category,
+        type: 'trial' as const,
+        studentId: null as number | null,
+        leadId: lead.id,
+        // Include lead data for skill reports
+        lead: lead,
+      }));
+    
+    // Get active students assigned to this batch
+    const activeStudents = allStudents
+      .filter((student: any) => {
+        const batchIds = student.student_batch_ids || [];
+        return batchIds.includes(selectedBatchId);
+      })
+      .map((student: any) => {
+        // Find the associated lead for skill reports
+        const associatedLead = allLeads.find((l: any) => l.id === student.lead_id);
+        return {
+          id: student.lead_id, // Use lead_id for compatibility with existing UI
+          name: student.lead_player_name || 'Unknown',
+          ageCategory: student.lead_player_age_category || '', // Get from lead data
+          type: 'student' as const,
+          studentId: student.id,
+          leadId: student.lead_id,
+          inGracePeriod: student.in_grace_period || false, // Include grace period status
+          // Include lead data for skill reports
+          lead: associatedLead,
+        };
+      });
+    
+    // Combine and return
+    return [...trialLeads, ...activeStudents];
+  }, [allLeads, allStudents, selectedBatchId]);
+
   // Filter by search term
-  const filteredLeads = useMemo(() => {
-    if (!searchTerm) return batchLeads;
+  const filteredParticipants = useMemo(() => {
+    if (!searchTerm) return batchParticipants;
     
     const searchLower = searchTerm.toLowerCase();
-    return batchLeads.filter(lead =>
-      lead.player_name.toLowerCase().includes(searchLower)
+    return batchParticipants.filter(participant =>
+      participant.name.toLowerCase().includes(searchLower)
     );
-  }, [batchLeads, searchTerm]);
+  }, [batchParticipants, searchTerm]);
+
+  // Phase 2: Fetch milestone data and attendance history for all active students
+  useEffect(() => {
+    const fetchMilestonesAndHistory = async () => {
+      const milestonePromises: Promise<any>[] = [];
+      const historyPromises: Promise<any>[] = [];
+      const milestoneMap: Record<number, any> = {};
+      const historyMap: Record<number, any> = {};
+      
+      filteredParticipants.forEach(participant => {
+        if (participant.type === 'student' && participant.studentId) {
+          // Fetch milestones
+          milestonePromises.push(
+            studentsAPI.getMilestones(participant.studentId)
+              .then(data => {
+                milestoneMap[participant.studentId!] = data;
+              })
+              .catch(error => {
+                console.error(`Error fetching milestones for student ${participant.studentId}:`, error);
+              })
+          );
+        }
+        
+        // Fetch attendance history for all participants (students and trials)
+        if (participant.leadId) {
+          historyPromises.push(
+            attendanceAPI.getHistory(participant.leadId)
+              .then(data => {
+                historyMap[participant.leadId] = data;
+              })
+              .catch(error => {
+                console.error(`Error fetching attendance history for lead ${participant.leadId}:`, error);
+              })
+          );
+        }
+      });
+      
+      await Promise.all([...milestonePromises, ...historyPromises]);
+      setMilestoneData(milestoneMap);
+      setAttendanceHistoryData(historyMap);
+    };
+    
+    if (filteredParticipants.length > 0) {
+      fetchMilestonesAndHistory();
+    }
+  }, [filteredParticipants]);
   
   // Track attendance state for each lead
   const [attendanceStatus, setAttendanceStatus] = useState<Record<number, 'Present' | 'Absent' | null>>({});
@@ -72,21 +183,48 @@ export default function CheckInPage() {
   
   // Calculate attendance summary
   const attendanceSummary = useMemo(() => {
-    const total = filteredLeads.length;
+    const total = filteredParticipants.length;
     const marked = Object.values(attendanceStatus).filter(s => s !== null).length;
     return {
       total,
       marked,
       remaining: total - marked,
     };
-  }, [filteredLeads, attendanceStatus]);
+  }, [filteredParticipants, attendanceStatus]);
   
-  // Check if all students have attendance marked
-  const allMarked = filteredLeads.length > 0 && attendanceSummary.marked === filteredLeads.length;
+  // Check if all participants have attendance marked
+  const allMarked = filteredParticipants.length > 0 && attendanceSummary.marked === filteredParticipants.length;
   
   const recordAttendanceMutation = useRecordAttendance();
   
+  // Emergency SOS handler
+  const handleEmergencySOS = (participantName: string) => {
+    // Use default support number from config
+    const supportPhone = EMERGENCY_SUPPORT_CONFIG.DEFAULT_SUPPORT_PHONE;
+    
+    // Clean phone number for tel: protocol (remove non-digits except +)
+    const cleanPhone = supportPhone.replace(/[^\d+]/g, '');
+    
+    // Show safety toast
+    toast('Calling Academy Support... stay calm and assist the student.', {
+      icon: '🆘',
+      duration: 4000,
+      style: {
+        background: '#fee2e2',
+        color: '#991b1b',
+        border: '2px solid #dc2626',
+        fontWeight: 'bold',
+      },
+    });
+    
+    // Trigger device call
+    window.location.href = `tel:${cleanPhone}`;
+  };
+  
   const handleAttendanceClick = async (
+    participantId: number,
+    participantType: 'trial' | 'student',
+    studentId: number | null,
     leadId: number,
     batchId: number,
     status: 'Present' | 'Absent'
@@ -97,18 +235,20 @@ export default function CheckInPage() {
     }
     
     // Update local state immediately for better UX
-    setAttendanceStatus(prev => ({ ...prev, [leadId]: status }));
+    setAttendanceStatus(prev => ({ ...prev, [participantId]: status }));
     
     try {
+      // Use student_id for active students, lead_id for trial students
       await recordAttendanceMutation.mutateAsync({
-        lead_id: leadId,
+        student_id: participantType === 'student' && studentId ? studentId : undefined,
+        lead_id: participantType === 'trial' ? leadId : undefined,
         batch_id: batchId,
         status,
       });
       // Success toast is handled in the hook
     } catch (error) {
       // Revert state on error
-      setAttendanceStatus(prev => ({ ...prev, [leadId]: null }));
+      setAttendanceStatus(prev => ({ ...prev, [participantId]: null }));
       // Error toast is handled in the hook
       console.error('Error recording attendance:', error);
     }
@@ -142,6 +282,42 @@ export default function CheckInPage() {
     }
   };
   
+  // Generate gradient colors for player avatars based on name
+  const getAvatarGradient = (name: string): string => {
+    const gradients = [
+      'from-indigo-500 to-purple-600',
+      'from-emerald-500 to-teal-600',
+      'from-blue-500 to-cyan-600',
+      'from-pink-500 to-rose-600',
+      'from-orange-500 to-amber-600',
+      'from-violet-500 to-purple-600',
+      'from-green-500 to-emerald-600',
+      'from-red-500 to-pink-600',
+    ];
+    const index = name.charCodeAt(0) % gradients.length;
+    return gradients[index];
+  };
+
+  // Get player initials
+  const getInitials = (name: string): string => {
+    return name
+      .split(' ')
+      .map(n => n[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2);
+  };
+
+  // Format time from HH:MM:SS to HH:MM AM/PM
+  const formatTime = (timeStr: string | null | undefined): string => {
+    if (!timeStr) return 'TBD';
+    const [hours, minutes] = timeStr.split(':');
+    const hour = parseInt(hours, 10);
+    const ampm = hour >= 12 ? 'PM' : 'AM';
+    const displayHour = hour % 12 || 12;
+    return `${displayHour.toString().padStart(2, '0')}:${minutes} ${ampm}`;
+  };
+
   const handleBackToCommandCenter = () => {
     router.push('/command-center');
   };
@@ -170,178 +346,374 @@ export default function CheckInPage() {
   
   return (
     <MainLayout>
-      <div className="min-h-screen bg-gray-100 p-4 sm:p-6">
-        {/* Back Button */}
-        <button
-          onClick={handleBackToCommandCenter}
-          className="mb-6 flex items-center gap-2 text-gray-700 hover:text-gray-900 transition-colors group"
-        >
-          <ArrowLeft className="h-5 w-5 group-hover:-translate-x-1 transition-transform" />
-          <span className="text-base font-medium">Back to Command Center</span>
-        </button>
-        
-        <header className="mb-6">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">✅ Check-In</h1>
-          <p className="text-gray-600">Mark attendance for your batch</p>
-        </header>
+      <div className="min-h-screen bg-slate-50 pb-24 flex flex-col">
+        {/* Compact Sticky Header with Batch Info */}
+        {selectedBatchId && selectedBatch && (
+          <div className="sticky top-0 z-20 bg-gradient-to-r from-tofa-navy to-indigo-950 text-white shadow-2xl border-b-4 border-tofa-gold/30">
+            <div className="px-4 py-3 flex items-center justify-between">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <ArrowLeft 
+                    onClick={handleBackToCommandCenter}
+                    className="h-5 w-5 cursor-pointer hover:text-tofa-gold transition-colors flex-shrink-0" 
+                  />
+                  {/* Small Logo */}
+                  <div className="flex-shrink-0">
+                    <Image
+                      src="/logo.png"
+                      alt="TOFA Logo"
+                      width={32}
+                      height={32}
+                      className="object-contain"
+                    />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h1 className="text-lg font-black uppercase tracking-tight truncate flex items-center gap-2">
+                      <span>CHECK-IN</span>
+                    </h1>
+                    <div className="flex items-center gap-3 mt-0.5">
+                      <span className="text-xs font-bold text-white/80">{selectedBatch.name}</span>
+                      <div className="flex items-center gap-1.5 text-xs font-bold text-white/70">
+                        <Clock className="h-3.5 w-3.5" />
+                        <span>{formatTime(selectedBatch.start_time)}</span>
+                      </div>
+                      <span className="text-xs font-semibold text-white/70">{selectedBatch.age_category}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="ml-3 px-3 py-1.5 bg-tofa-gold/20 backdrop-blur-sm rounded-full border-2 border-tofa-gold/40 flex items-center gap-1.5 flex-shrink-0">
+                <Users className="h-4 w-4" />
+                <span className="text-sm font-black">{attendanceSummary.total}</span>
+              </div>
+            </div>
+            
+            {/* Slim Search Bar - Pinned Below Header */}
+            <div className="px-4 pb-2.5 relative">
+              <Search className="absolute left-7 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-3 py-2 bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg text-sm text-white placeholder:text-gray-300 focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none font-medium"
+              />
+            </div>
+          </div>
+        )}
 
-        {/* Batch Selector */}
-        <div className="mb-6">
-          <label className="block text-sm font-medium text-gray-700 mb-2">
-            Select Batch
-          </label>
-          <select
-            value={selectedBatchId || ''}
-            onChange={(e) => {
-              const newBatchId = e.target.value ? parseInt(e.target.value, 10) : null;
-              setSelectedBatchId(newBatchId);
-              // Update URL without reload
-              if (newBatchId) {
-                router.push(`/check-in?batchId=${newBatchId}`, { scroll: false });
-              } else {
-                router.push('/check-in', { scroll: false });
-              }
-            }}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-base bg-white"
-            disabled={batchesLoading}
-          >
-            <option value="">Choose a batch...</option>
-            {coachBatches.map((batch) => (
-              <option key={batch.id} value={batch.id}>
-                {batch.name} ({batch.age_category})
-              </option>
-            ))}
-          </select>
-        </div>
+        {/* Batch Selector - Show when no batch selected */}
+        {!selectedBatchId && (
+          <div className="p-4 bg-slate-900 text-white border-b-4 border-indigo-500">
+            <div className="mb-4">
+              <h1 className="text-xl font-black uppercase tracking-tight mb-1">✅ Check-In</h1>
+              <p className="text-sm font-medium text-gray-300">Select a batch to mark attendance</p>
+            </div>
+            <select
+              value={selectedBatchId || ''}
+              onChange={(e) => {
+                const newBatchId = e.target.value ? parseInt(e.target.value, 10) : null;
+                setSelectedBatchId(newBatchId);
+                if (newBatchId) {
+                  router.push(`/check-in?batchId=${newBatchId}`, { scroll: false });
+                  if (typeof window !== 'undefined') {
+                    localStorage.setItem('lastSelectedBatchId', String(newBatchId));
+                  }
+                } else {
+                  router.push('/check-in', { scroll: false });
+                  if (typeof window !== 'undefined') {
+                    localStorage.removeItem('lastSelectedBatchId');
+                  }
+                }
+              }}
+              className="w-full px-4 py-2.5 border-2 border-indigo-500 rounded-lg focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 text-sm bg-white text-gray-900 font-bold"
+              disabled={batchesLoading}
+            >
+              <option value="">Choose a batch...</option>
+              {coachBatches.map((batch) => (
+                <option key={batch.id} value={batch.id}>
+                  {batch.name} ({batch.age_category})
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {selectedBatchId && selectedBatch && (
           <>
-            {/* Selection Summary */}
-            <div className="mb-6 bg-white rounded-lg shadow-md p-4 border border-gray-200">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold text-gray-900">{selectedBatch.name}</h2>
-                  <p className="text-sm text-gray-600 mt-1">
-                    {selectedBatch.age_category} • {selectedBatch.start_time ? new Date(`2000-01-01T${selectedBatch.start_time}`).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }) : 'Time TBD'}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <div className="text-2xl font-bold text-gray-900">{attendanceSummary.total}</div>
-                  <div className="text-sm text-gray-600">Students</div>
+
+            {/* Compact Roster List - High Density */}
+            {(leadsLoading || studentsLoading) ? (
+              <div className="flex-1 flex items-center justify-center py-12">
+                <div className="text-center">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto mb-2"></div>
+                  <p className="text-sm text-gray-500 font-medium">Loading participants...</p>
                 </div>
               </div>
-            </div>
-
-            {/* Search Bar */}
-            <div className="mb-6 relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search player name..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg shadow-sm focus:ring-indigo-500 focus:border-indigo-500 text-base"
-              />
-            </div>
-
-            {/* Attendance List */}
-            {leadsLoading ? (
-              <div className="text-center py-8 text-gray-600">Loading students...</div>
-            ) : filteredLeads.length === 0 ? (
-              <div className="text-center py-8 text-gray-600">
-                {searchTerm ? 'No students found matching your search.' : 'No students assigned to this batch.'}
+            ) : filteredParticipants.length === 0 ? (
+              <div className="flex-1 flex items-center justify-center py-12">
+                <div className="text-center">
+                  <Users className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+                  <p className="text-sm font-bold text-gray-600">
+                    {searchTerm ? 'No participants found' : 'No participants assigned to this batch.'}
+                  </p>
+                </div>
               </div>
             ) : (
               <>
-                <div className="space-y-4 mb-6">
-                  {filteredLeads.map((lead) => (
-                    <div
-                      key={lead.id}
-                      className="bg-white rounded-lg shadow-md p-5 border border-gray-200"
-                    >
-                      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                        <div className="flex-1">
-                          <h2 className="text-xl font-semibold text-gray-900 mb-1">
-                            {lead.player_name}
-                          </h2>
-                          <p className="text-gray-600 text-sm">
-                            Age: {lead.player_age_category}
-                          </p>
-                        </div>
-                        
-                        {/* Attendance Buttons */}
-                        <div className="space-y-3">
-                          <div className="flex gap-3">
+                <div className="flex-1 overflow-y-auto px-2 py-2">
+                  <div className="space-y-1.5">
+                    {filteredParticipants.map((participant, index) => {
+                      const isPresent = attendanceStatus[participant.id] === 'Present';
+                      const isAbsent = attendanceStatus[participant.id] === 'Absent';
+                      const avatarGradient = getAvatarGradient(participant.name);
+                      const initials = getInitials(participant.name);
+                      
+                      return (
+                      <div
+                        key={`${participant.type}-${participant.id}`}
+                        className={`rounded-lg px-3 py-2.5 border-2 transition-all duration-200 ${
+                          isPresent 
+                            ? 'bg-emerald-50 border-emerald-300 shadow-sm' 
+                            : isAbsent
+                            ? 'bg-rose-50 border-rose-300 shadow-sm'
+                            : 'bg-white border-gray-200 hover:border-indigo-300 hover:shadow-sm'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          {/* Left Side: Avatar + Name + Badges + Icons */}
+                          <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                            {/* Circular Avatar with Gradient */}
+                            <div className={`w-10 h-10 rounded-full bg-gradient-to-br ${avatarGradient} flex items-center justify-center shadow-lg border-2 border-white flex-shrink-0`}>
+                              <span className="text-sm font-black text-white">
+                                {initials}
+                              </span>
+                            </div>
+                            
+                            {/* Name and Info */}
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <h3 className="text-base font-black text-gray-900 uppercase tracking-tight truncate">
+                                  {participant.name}
+                                </h3>
+                                
+                                {/* Skills Icon - Inline */}
+                                {participant.type === 'student' && (() => {
+                                  const lead = (participant as any).lead;
+                                  if (!lead || !lead.extra_data) return null;
+                                  
+                                  const extraData = lead.extra_data as any;
+                                  const skillReports = extraData.skill_reports || [];
+                                  
+                                  let lastReportDate: Date | null = null;
+                                  if (Array.isArray(skillReports) && skillReports.length > 0) {
+                                    const lastReport = skillReports[skillReports.length - 1];
+                                    if (lastReport.date) {
+                                      lastReportDate = new Date(lastReport.date);
+                                    }
+                                  }
+                                  
+                                  const daysSinceLastReport = lastReportDate 
+                                    ? Math.floor((new Date().getTime() - lastReportDate.getTime()) / (1000 * 60 * 60 * 24))
+                                    : Infinity;
+                                  
+                                  const needsUpdate = daysSinceLastReport > 30;
+                                  
+                                  return (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setSelectedStudentForSkillReport({
+                                          leadId: participant.leadId,
+                                          name: participant.name,
+                                          studentId: participant.studentId || undefined,
+                                        });
+                                      }}
+                                      className={`p-1 rounded transition-all ${
+                                        needsUpdate
+                                          ? 'bg-orange-100 text-orange-600 animate-pulse'
+                                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                                      }`}
+                                      title={needsUpdate 
+                                        ? `Last report: ${daysSinceLastReport} days ago`
+                                        : lastReportDate 
+                                          ? `Last report: ${lastReportDate.toLocaleDateString()}`
+                                          : 'No skill report yet'}
+                                    >
+                                      <BarChart3 className="h-4 w-4" />
+                                    </button>
+                                  );
+                                })()}
+                                
+                                {/* Emergency SOS - Inline Small Icon */}
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleEmergencySOS(participant.name);
+                                  }}
+                                  className="p-1 rounded bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
+                                  title={`Call ${EMERGENCY_SUPPORT_CONFIG.SUPPORT_LABEL}`}
+                                >
+                                  <PhoneCall className="h-4 w-4" />
+                                </button>
+                                
+                                {/* Type Badge */}
+                                <span className={`px-2 py-0.5 text-[10px] font-black rounded-full uppercase tracking-wide flex-shrink-0 ${
+                                  participant.type === 'student' 
+                                    ? 'bg-emerald-100 text-emerald-700 border border-emerald-300' 
+                                    : 'bg-blue-100 text-blue-700 border border-blue-300'
+                                }`}>
+                                  {participant.type === 'student' ? 'Active' : 'Trial'}
+                                </span>
+                              </div>
+                              
+                              {/* Age and Attendance Indicator - Compact */}
+                              <div className="flex items-center gap-2 mt-0.5">
+                                {participant.ageCategory && (
+                                  <span className="text-xs font-bold text-gray-600">{participant.ageCategory}</span>
+                                )}
+                                
+                                {/* Compact Attendance History */}
+                                {(() => {
+                                  const history = attendanceHistoryData[participant.leadId];
+                                  if (!history || !history.attendance || history.attendance.length === 0) {
+                                    return null;
+                                  }
+                                  
+                                  const presentRecords = history.attendance
+                                    .filter((r: any) => r.status === 'Present')
+                                    .sort((a: any, b: any) => {
+                                      const dateA = new Date(a.date).getTime();
+                                      const dateB = new Date(b.date).getTime();
+                                      return dateB - dateA;
+                                    })
+                                    .slice(0, 5);
+                                  
+                                  if (presentRecords.length === 0) return null;
+                                  
+                                  const lastDate = new Date(presentRecords[0].date);
+                                  const today = new Date();
+                                  today.setHours(0, 0, 0, 0);
+                                  const lastDateOnly = new Date(lastDate);
+                                  lastDateOnly.setHours(0, 0, 0, 0);
+                                  const daysSince = Math.floor((today.getTime() - lastDateOnly.getTime()) / (1000 * 60 * 60 * 24));
+                                  
+                                  const recentRecords = history.attendance
+                                    .sort((a: any, b: any) => {
+                                      const dateA = new Date(a.date).getTime();
+                                      const dateB = new Date(b.date).getTime();
+                                      return dateB - dateA;
+                                    })
+                                    .slice(0, 3);
+                                  
+                                  const recentAbsences = recentRecords.filter((r: any) => r.status === 'Absent').length;
+                                  
+                                  if (recentAbsences >= 2) {
+                                    return <span className="text-[10px] font-bold text-red-600">⚠️ Missed {recentAbsences}</span>;
+                                  } else if (daysSince === 0) {
+                                    return <span className="text-[10px] font-bold text-emerald-600">✓ Today</span>;
+                                  } else if (daysSince === 1) {
+                                    return <span className="text-[10px] text-gray-500">Yesterday</span>;
+                                  } else {
+                                    return <span className="text-[10px] text-gray-500">{daysSince}d ago</span>;
+                                  }
+                                })()}
+                                
+                                {/* Milestone Alert - Compact */}
+                                {participant.type === 'student' && participant.studentId && milestoneData[participant.studentId] && (() => {
+                                  const milestone = milestoneData[participant.studentId];
+                                  if (milestone.next_milestone && milestone.sessions_until_next === 1) {
+                                    return (
+                                      <span className="px-1.5 py-0.5 text-[10px] font-black bg-yellow-400 text-yellow-900 rounded-full">
+                                        🥇 {milestone.next_milestone}
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                })()}
+                                
+                                {/* Grace Period - Compact */}
+                                {participant.type === 'student' && (participant as any).inGracePeriod && (
+                                  <span className="px-1.5 py-0.5 text-[10px] font-bold bg-yellow-100 text-yellow-700 rounded border border-yellow-300">
+                                    ⚠️ Payment
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          
+                          {/* Right Side: Compact Square Buttons */}
+                          <div className="flex items-center gap-2 flex-shrink-0">
                             <button
                               onClick={() =>
                                 handleAttendanceClick(
-                                  lead.id,
+                                  participant.id,
+                                  participant.type,
+                                  participant.studentId,
+                                  participant.leadId,
                                   selectedBatchId,
                                   'Present'
                                 )
                               }
-                              disabled={recordAttendanceMutation.isPending || attendanceStatus[lead.id] === 'Present'}
-                              className={`flex-1 px-6 py-3 font-semibold rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-base ${
-                                attendanceStatus[lead.id] === 'Present'
-                                  ? 'bg-green-700 text-white'
-                                  : 'bg-green-600 text-white hover:bg-green-700'
+                              disabled={recordAttendanceMutation.isPending || isPresent}
+                              className={`w-11 h-11 rounded-lg font-black text-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 flex items-center justify-center ${
+                                isPresent
+                                  ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-300/50 border-2 border-emerald-700'
+                                  : 'bg-emerald-500 text-white hover:bg-emerald-600 shadow-md hover:shadow-lg border-2 border-emerald-600'
                               }`}
                             >
-                              ✅ Present
+                              ✓
                             </button>
                             <button
                               onClick={() =>
                                 handleAttendanceClick(
-                                  lead.id,
+                                  participant.id,
+                                  participant.type,
+                                  participant.studentId,
+                                  participant.leadId,
                                   selectedBatchId,
                                   'Absent'
                                 )
                               }
-                              disabled={recordAttendanceMutation.isPending || attendanceStatus[lead.id] === 'Absent'}
-                              className={`flex-1 px-6 py-3 font-semibold rounded-lg shadow-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-base ${
-                                attendanceStatus[lead.id] === 'Absent'
-                                  ? 'bg-red-700 text-white'
-                                  : 'bg-red-600 text-white hover:bg-red-700'
+                              disabled={recordAttendanceMutation.isPending || isAbsent}
+                              className={`w-11 h-11 rounded-lg font-black text-sm transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95 flex items-center justify-center ${
+                                isAbsent
+                                  ? 'bg-rose-600 text-white shadow-lg shadow-rose-300/50 border-2 border-rose-700'
+                                  : 'bg-rose-500 text-white hover:bg-rose-600 shadow-md hover:shadow-lg border-2 border-rose-600'
                               }`}
                             >
-                              ❌ Absent
+                              ✗
                             </button>
                           </div>
-                          {/* Rate Performance Button - Only show if attendance is marked */}
-                          {attendanceStatus[lead.id] && (
-                            <button
-                              onClick={() => setSelectedLeadForRating({ id: lead.id, name: lead.player_name })}
-                              className="w-full px-4 py-2 bg-indigo-600 text-white font-medium rounded-lg shadow-sm hover:bg-indigo-700 transition-colors flex items-center justify-center gap-2"
-                            >
-                              <Star className="h-4 w-4" />
-                              Rate Performance
-                            </button>
-                          )}
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    )})}
+                  </div>
                 </div>
 
-                {/* Complete Session Button */}
-                <div className="sticky bottom-0 bg-gray-100 pt-4 pb-4 -mx-4 sm:-mx-6 px-4 sm:px-6 border-t border-gray-200">
-                  <div className="mb-3 text-sm text-gray-600 text-center">
-                    {attendanceSummary.remaining > 0 ? (
-                      <span className="text-orange-600 font-medium">
-                        {attendanceSummary.remaining} student{attendanceSummary.remaining !== 1 ? 's' : ''} remaining
-                      </span>
-                    ) : (
-                      <span className="text-green-600 font-medium">✓ All students marked</span>
-                    )}
+                {/* Floating Checkout Bar - Fixed at Bottom */}
+                <div className="fixed bottom-0 left-0 right-0 z-30 bg-white/95 backdrop-blur-md border-t-4 border-indigo-500 shadow-2xl safe-area-inset-bottom">
+                  <div className="px-4 py-2.5">
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <div className="text-xs font-black uppercase tracking-wide">
+                        {attendanceSummary.remaining > 0 ? (
+                          <span className="text-orange-600">
+                            {attendanceSummary.remaining} remaining
+                          </span>
+                        ) : (
+                          <span className="text-emerald-600">✓ All marked</span>
+                        )}
+                      </div>
+                      <button
+                        onClick={handleCompleteSession}
+                        disabled={!allMarked || isSubmitting}
+                        className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-blue-600 text-white font-black rounded-lg shadow-lg hover:from-indigo-700 hover:to-blue-700 active:scale-95 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed text-sm uppercase tracking-wide flex items-center gap-2"
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                        {isSubmitting ? 'Submitting...' : 'Check-out'}
+                      </button>
+                    </div>
                   </div>
-                  <button
-                    onClick={handleCompleteSession}
-                    disabled={!allMarked || isSubmitting}
-                    className="w-full px-6 py-4 bg-indigo-600 text-white font-semibold rounded-lg shadow-lg hover:bg-indigo-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-base flex items-center justify-center gap-2"
-                  >
-                    <CheckCircle2 className="h-5 w-5" />
-                    {isSubmitting ? 'Submitting...' : 'Submit & Check-out'}
-                  </button>
                 </div>
               </>
             )}
@@ -349,12 +721,30 @@ export default function CheckInPage() {
         )}
 
         {!selectedBatchId && !batchesLoading && (
-          <div className="text-center py-12 text-gray-500">
-            <p className="text-lg mb-2">Select a batch to mark attendance</p>
-            {coachBatches.length === 0 && (
-              <p className="text-sm">You don't have any batches assigned yet.</p>
-            )}
+          <div className="flex-1 flex items-center justify-center py-12">
+            <div className="text-center">
+              <Users className="h-16 w-16 text-gray-300 mx-auto mb-4" />
+              <p className="text-sm font-bold text-gray-600 mb-1">Select a batch to mark attendance</p>
+              {coachBatches.length === 0 && (
+                <p className="text-xs text-gray-500">You don't have any batches assigned yet.</p>
+              )}
+            </div>
           </div>
+        )}
+
+        {/* Skill Report Modal */}
+        {selectedStudentForSkillReport && (
+          <SkillReportModal
+            isOpen={!!selectedStudentForSkillReport}
+            onClose={() => setSelectedStudentForSkillReport(null)}
+            leadId={selectedStudentForSkillReport.leadId}
+            playerName={selectedStudentForSkillReport.name}
+            onSuccess={() => {
+              // Refresh leads data to get updated skill reports
+              queryClient.invalidateQueries({ queryKey: ['leads'] });
+              setSelectedStudentForSkillReport(null);
+            }}
+          />
         )}
 
         {/* Success Screen */}

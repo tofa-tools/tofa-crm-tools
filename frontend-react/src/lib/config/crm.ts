@@ -65,3 +65,14 @@ export function getFreshnessLabel(freshness: 'fresh' | 'stale' | 'rotting'): str
   }
 }
 
+/**
+ * Emergency Support Configuration
+ * Default support number for Emergency SOS calls from coaches
+ */
+export const EMERGENCY_SUPPORT_CONFIG = {
+  /** Default Academy Admin/Support Phone Number */
+  DEFAULT_SUPPORT_PHONE: '+1234567890', // TODO: Update with actual support number
+  /** Support Phone Label */
+  SUPPORT_LABEL: 'Academy Support',
+} as const;
+

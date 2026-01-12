@@ -1,18 +1,23 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useState, FormEvent, useRef } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
-import { useCenters, useCreateCenter } from '@/hooks/useCenters';
+import { useCenters, useCreateCenter, useUpdateCenter } from '@/hooks/useCenters';
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
+import { Edit } from 'lucide-react';
+import type { Center } from '@/types';
 
 export default function CentersPage() {
   const { user } = useAuth();
   const router = useRouter();
   const { data: centers, isLoading } = useCenters();
   const createCenterMutation = useCreateCenter();
+  const updateCenterMutation = useUpdateCenter();
+  const formRef = useRef<HTMLDivElement>(null);
 
+  const [editingCenter, setEditingCenter] = useState<Center | null>(null);
   const [displayName, setDisplayName] = useState('');
   const [metaTag, setMetaTag] = useState('');
   const [city, setCity] = useState('');
@@ -22,13 +27,41 @@ export default function CentersPage() {
 
   useEffect(() => {
     if (user && user.role !== 'team_lead') {
-      router.push('/dashboard');
+      router.push('/command-center');
     }
   }, [user, router]);
 
   if (user?.role !== 'team_lead') {
     return null;
   }
+
+  const resetForm = () => {
+    setEditingCenter(null);
+    setDisplayName('');
+    setMetaTag('');
+    setCity('');
+    setLocation('');
+    setError('');
+  };
+
+  const handleEdit = (center: Center) => {
+    setEditingCenter(center);
+    setDisplayName(center.display_name);
+    setMetaTag(center.meta_tag_name);
+    setCity(center.city);
+    setLocation(center.location || '');
+    setShowForm(true);
+    setError('');
+    
+    // Scroll to form
+    setTimeout(() => {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+  };
+
+  const handleCancel = () => {
+    resetForm();
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -40,21 +73,32 @@ export default function CentersPage() {
     }
 
     try {
-      await createCenterMutation.mutateAsync({
-        display_name: displayName,
-        meta_tag_name: metaTag,
-        city,
-        location: location || undefined,
-      });
-      // Reset form
-      setDisplayName('');
-      setMetaTag('');
-      setCity('');
-      setLocation('');
-      setError('');
-      alert('✅ Center created successfully!');
+      if (editingCenter) {
+        // Update existing center
+        await updateCenterMutation.mutateAsync({
+          centerId: editingCenter.id,
+          centerData: {
+            display_name: displayName,
+            meta_tag_name: metaTag,
+            city,
+            location: location || undefined,
+          },
+        });
+        resetForm();
+        alert('✅ Center updated successfully!');
+      } else {
+        // Create new center
+        await createCenterMutation.mutateAsync({
+          display_name: displayName,
+          meta_tag_name: metaTag,
+          city,
+          location: location || undefined,
+        });
+        resetForm();
+        alert('✅ Center created successfully!');
+      }
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to create center');
+      setError(err.response?.data?.detail || `Failed to ${editingCenter ? 'update' : 'create'} center`);
     }
   };
 
@@ -77,11 +121,11 @@ export default function CentersPage() {
           <p className="text-gray-600 mt-2">Create and manage academy centers</p>
         </div>
 
-        {/* Create Center Form */}
-        <div className="bg-white rounded-lg shadow-md p-6">
+        {/* Create/Edit Center Form */}
+        <div ref={formRef} className="bg-white rounded-lg shadow-md p-6">
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-semibold text-gray-900">
-              ➕ Add New Center
+              {editingCenter ? `✏️ Edit Center: ${editingCenter.display_name}` : '➕ Add New Center'}
             </h2>
             <button
               onClick={() => setShowForm(!showForm)}
@@ -151,15 +195,26 @@ export default function CentersPage() {
                 </div>
               </div>
 
-              <button
-                type="submit"
-                disabled={createCenterMutation.isPending}
-                className="w-full bg-gradient-primary text-white font-semibold py-3 px-4 rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
-              >
-                {createCenterMutation.isPending
-                  ? 'Creating...'
-                  : '✨ Create Center'}
-              </button>
+              <div className="flex gap-3">
+                {editingCenter && (
+                  <button
+                    type="button"
+                    onClick={handleCancel}
+                    className="flex-1 bg-gray-200 text-gray-800 font-semibold py-3 px-4 rounded-lg hover:bg-gray-300 transition-colors"
+                  >
+                    Cancel Edit
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  disabled={createCenterMutation.isPending || updateCenterMutation.isPending}
+                  className={`${editingCenter ? 'flex-1' : 'w-full'} bg-gradient-primary text-white font-semibold py-3 px-4 rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-md`}
+                >
+                  {createCenterMutation.isPending || updateCenterMutation.isPending
+                    ? (editingCenter ? 'Updating...' : 'Creating...')
+                    : (editingCenter ? '✨ Update Center' : '✨ Create Center')}
+                </button>
+              </div>
             </form>
           )}
         </div>
@@ -189,6 +244,9 @@ export default function CentersPage() {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Location
                     </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
@@ -208,6 +266,15 @@ export default function CentersPage() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {center.location || '-'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        <button
+                          onClick={() => handleEdit(center)}
+                          className="flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium"
+                        >
+                          <Edit className="h-4 w-4" />
+                          Edit
+                        </button>
                       </td>
                     </tr>
                   ))}

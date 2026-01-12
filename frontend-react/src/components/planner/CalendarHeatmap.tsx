@@ -15,6 +15,7 @@ interface CalendarHeatmapProps {
   selectedDate: string | null;
   onDateSelect: (date: string) => void;
   onMonthChange: (direction: 'prev' | 'next') => void;
+  compact?: boolean; // Compact mode for sidebar widget
 }
 
 export function CalendarHeatmap({
@@ -24,6 +25,7 @@ export function CalendarHeatmap({
   selectedDate,
   onDateSelect,
   onMonthChange,
+  compact = false,
 }: CalendarHeatmapProps) {
   const monthStart = new Date(year, month - 1, 1);
   const monthEnd = new Date(year, month, 0);
@@ -88,6 +90,109 @@ export function CalendarHeatmap({
     return dateKey === selectedDate;
   };
 
+  // Compact mode for sidebar widget
+  if (compact) {
+    return (
+      <div>
+        {/* Month Navigation - Compact */}
+        <div className="flex items-center justify-between mb-3">
+          <button
+            onClick={() => onMonthChange('prev')}
+            className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 transition-colors"
+            title="Previous month"
+          >
+            ←
+          </button>
+          <h3 className="text-sm font-semibold text-gray-900">
+            {format(monthStart, 'MMM yyyy')}
+          </h3>
+          <button
+            onClick={() => onMonthChange('next')}
+            className="px-2 py-1 text-xs border border-gray-300 rounded hover:bg-gray-50 transition-colors"
+            title="Next month"
+          >
+            →
+          </button>
+        </div>
+
+        {/* Compact Calendar Grid */}
+        <div className="grid grid-cols-7 gap-0.5 bg-gray-200">
+          {/* Day Headers - Compact */}
+          {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((day, idx) => (
+            <div
+              key={idx}
+              className="bg-gray-100 p-1 text-center text-[10px] font-semibold text-gray-700"
+            >
+              {day}
+            </div>
+          ))}
+
+          {/* Calendar Days - Compact */}
+          {weeks.map((week, weekIndex) => (
+            <React.Fragment key={weekIndex}>
+              {week.slice(0, 7).map((date, dayIndex) => {
+                const dateKey = format(date, 'yyyy-MM-dd');
+                const data = calendarData[dateKey] || {
+                  total: 0,
+                  high_priority: 0,
+                  trials: 0,
+                  calls: 0,
+                };
+                const colorClass = getWorkloadColor(dateKey);
+                const inCurrentMonth = isCurrentMonth(date);
+                const isTodayDate = isToday(date);
+                const isSelectedDate = isSelected(date);
+
+                return (
+                  <button
+                    key={dayIndex}
+                    onClick={() => onDateSelect(dateKey)}
+                    className={`min-h-[32px] p-1 text-center transition-all hover:ring-2 hover:ring-indigo-400 ${
+                      colorClass
+                    } ${!inCurrentMonth ? 'opacity-30' : ''} ${
+                      isTodayDate ? 'ring-2 ring-blue-500' : ''
+                    } ${
+                      isSelectedDate ? 'ring-2 ring-indigo-600 font-bold' : ''
+                    }`}
+                    title={`${format(date, 'MMM d')}: ${data.total} task${data.total !== 1 ? 's' : ''}`}
+                  >
+                    <div className="text-[11px] font-semibold">{date.getDate()}</div>
+                    {data.total > 0 && (
+                      <div className="text-[9px] mt-0.5">{data.total}</div>
+                    )}
+                  </button>
+                );
+              })}
+            </React.Fragment>
+          ))}
+        </div>
+
+        {/* Compact Legend */}
+        <div className="mt-3 pt-3 border-t border-gray-200">
+          <div className="flex items-center justify-center gap-2 text-[10px]">
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 bg-gray-50 border border-gray-200 rounded"></div>
+              <span>0</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 bg-green-200 rounded"></div>
+              <span>1-3</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 bg-yellow-400 rounded"></div>
+              <span>4-10</span>
+            </div>
+            <div className="flex items-center gap-1">
+              <div className="w-3 h-3 bg-red-500 rounded"></div>
+              <span>10+</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Full mode (original layout)
   return (
     <div className="bg-white rounded-lg shadow-md p-4">
       {/* Month Navigation */}

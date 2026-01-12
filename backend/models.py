@@ -3,6 +3,7 @@ from datetime import datetime, date, time
 from sqlmodel import Field, SQLModel, Relationship
 from sqlalchemy import Column, Time
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import relationship as sa_relationship
 import uuid
 
 # ==========================================
@@ -22,8 +23,8 @@ class BatchCoachLink(SQLModel, table=True):
 
 
 class StudentBatchLink(SQLModel, table=True):
-    """Join table linking Students (Leads) to Batches for multi-batch assignment."""
-    lead_id: Optional[int] = Field(default=None, foreign_key="lead.id", primary_key=True)
+    """Join table linking Students to Batches for multi-batch assignment."""
+    student_id: Optional[int] = Field(default=None, foreign_key="student.id", primary_key=True)
     batch_id: Optional[int] = Field(default=None, foreign_key="batch.id", primary_key=True)
 
 
@@ -42,6 +43,12 @@ class User(SQLModel, table=True):
     comments: List["Comment"] = Relationship(back_populates="user")
     audit_logs: List["AuditLog"] = Relationship(back_populates="user")
     attendances_taken: List["Attendance"] = Relationship(back_populates="user")
+    # Explicitly specify foreign key for status_change_requests_made relationship
+    # because StatusChangeRequest has multiple foreign keys to User (requested_by_id and resolved_by_id)
+    status_change_requests_made: List["StatusChangeRequest"] = Relationship(
+        back_populates="requested_by",
+        sa_relationship_kwargs={"foreign_keys": "[StatusChangeRequest.requested_by_id]"}
+    )
 
 
 class Center(SQLModel, table=True):
@@ -106,9 +113,9 @@ class Batch(SQLModel, table=True):
             "foreign_keys": "[Lead.permanent_batch_id]"
         }
     )
-    student_leads: List["Lead"] = Relationship(
-        back_populates="student_batches",
-        link_model="StudentBatchLink"
+    students: List["Student"] = Relationship(
+        back_populates="batches",
+        link_model=StudentBatchLink
     )
     attendances: List["Attendance"] = Relationship(back_populates="batch")
 
@@ -136,7 +143,6 @@ class Lead(SQLModel, table=True):
     # Status & Workflow
     status: str = Field(default="New") 
     next_followup_date: Optional[datetime] = None
-    score: int = Field(default=0)  # Auto-calculated (0-5 stars)
     extra_data: Optional[Dict] = Field(default={}, sa_column=Column(JSONB))  # For Skill Reports and extensible data (renamed from metadata to avoid SQLAlchemy conflict)
     do_not_contact: bool = Field(default=False)  # Opt-out flag for Dead/Not Interested leads
     
@@ -160,11 +166,7 @@ class Lead(SQLModel, table=True):
         }
     )
     
-    # Multi-batch assignment (replaces single permanent_batch_id)
-    student_batches: List["Batch"] = Relationship(
-        back_populates="student_leads",
-        link_model="StudentBatchLink"
-    )
+    # Note: student_batches relationship moved to Student model
     
     # Public Preference System
     public_token: Optional[str] = Field(default=None, unique=True, index=True)  # UUID string for public access
@@ -176,19 +178,63 @@ class Lead(SQLModel, table=True):
     loss_reason: Optional[str] = None  # Reason for losing the lead (e.g., 'Price/Fees', 'Repeated No-Show')
     loss_reason_notes: Optional[str] = None  # Additional notes about the loss
     reschedule_count: int = Field(default=0)  # Count of times trial was rescheduled due to absence
+    nudge_count: int = Field(default=0)  # Count of re-engagement nudges sent to Nurture leads
     
-    # Subscription & Membership
-    subscription_plan: Optional[str] = None  # 'Monthly', 'Quarterly', '6 Months', 'Yearly'
-    subscription_start_date: Optional[date] = None
-    subscription_end_date: Optional[date] = None
+    # Note: Subscription and payment fields moved to Student model
+    
+    call_confirmation_note: Optional[str] = None  # Note confirming call with parent
     
     comments: List["Comment"] = Relationship(back_populates="lead")
     audit_logs: List["AuditLog"] = Relationship(back_populates="lead")
     attendances: List["Attendance"] = Relationship(back_populates="lead")
+    status_change_requests: List["StatusChangeRequest"] = Relationship(back_populates="lead")
+    
+    # Relationship to Student (one-to-one: a lead can become one student)
+    student: Optional["Student"] = Relationship(back_populates="lead", sa_relationship_kwargs={"uselist": False})
 
 
 # ==========================================
-# 4. COMMUNICATION & AUDIT
+# 4. STUDENT SYSTEM (Active Members)
+# ==========================================
+
+class Student(SQLModel, table=True):
+    """Student model - Active members who have graduated from Lead status"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    lead_id: int = Field(foreign_key="lead.id", unique=True)  # One-to-one with Lead
+    center_id: int = Field(foreign_key="center.id")
+    
+    # Subscription & Membership
+    subscription_plan: str  # 'Monthly', 'Quarterly', '6 Months', 'Yearly'
+    subscription_start_date: date
+    subscription_end_date: Optional[date] = None
+    
+    # Payment
+    payment_proof_url: Optional[str] = None  # URL to uploaded payment proof image
+    
+    # Renewal & Grace Period
+    renewal_intent: bool = Field(default=False)  # Parent has indicated intent to renew
+    in_grace_period: bool = Field(default=False)  # Subscription expired but within 4-day grace period
+    grace_nudge_count: int = Field(default=0)  # Count of grace period nudges sent (0, 1, or 2)
+    
+    # Status
+    is_active: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    
+    # Relationships
+    lead: Optional["Lead"] = Relationship(back_populates="student")
+    center: Optional["Center"] = Relationship()
+    
+    # Multi-batch assignment
+    batches: List["Batch"] = Relationship(
+        back_populates="students",
+        link_model=StudentBatchLink
+    )
+    
+    attendances: List["Attendance"] = Relationship(back_populates="student")
+
+
+# ==========================================
+# 5. COMMUNICATION & AUDIT
 # ==========================================
 
 class Comment(SQLModel, table=True):
@@ -225,10 +271,30 @@ class AuditLog(SQLModel, table=True):
 # 5. ATTENDANCE SYSTEM
 # ==========================================
 
+class StatusChangeRequest(SQLModel, table=True):
+    """Status reversal approval request model"""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    lead_id: int = Field(foreign_key="lead.id")
+    lead: Optional["Lead"] = Relationship(back_populates="status_change_requests")
+    requested_by_id: int = Field(foreign_key="user.id")
+    requested_by: Optional["User"] = Relationship(
+        back_populates="status_change_requests_made",
+        sa_relationship_kwargs={"foreign_keys": "[StatusChangeRequest.requested_by_id]"}
+    )
+    current_status: str  # Current status of the lead
+    requested_status: str  # Status to revert to
+    reason: str  # Reason for the reversal request
+    request_status: str = Field(default="pending")  # 'pending', 'approved', 'rejected'
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    resolved_at: Optional[datetime] = None
+    resolved_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+
+
 class Attendance(SQLModel, table=True):
     """Attendance model for tracking player attendance in batches"""
     id: Optional[int] = Field(default=None, primary_key=True)
-    lead_id: int = Field(foreign_key="lead.id")
+    lead_id: Optional[int] = Field(default=None, foreign_key="lead.id")  # Optional for backward compatibility
+    student_id: Optional[int] = Field(default=None, foreign_key="student.id")  # Use this for active students
     batch_id: int = Field(foreign_key="batch.id")
     user_id: int = Field(foreign_key="user.id")  # Coach who took attendance
     date: date  # Will default in database, but we can also set it explicitly
@@ -238,6 +304,7 @@ class Attendance(SQLModel, table=True):
     
     # Relationships
     lead: Optional[Lead] = Relationship(back_populates="attendances")
+    student: Optional["Student"] = Relationship(back_populates="attendances")
     batch: Optional[Batch] = Relationship(back_populates="attendances")
     user: Optional[User] = Relationship(back_populates="attendances_taken")
 

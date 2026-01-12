@@ -27,11 +27,14 @@ export type Attendance = z.infer<typeof AttendanceSchema>;
  * Attendance Create Schema
  */
 export const AttendanceCreateSchema = z.object({
-  lead_id: z.number().min(1, 'Lead ID is required'),
+  lead_id: z.number().optional(), // Optional - used for trial students
+  student_id: z.number().optional(), // Optional - used for active students
   batch_id: z.number().min(1, 'Batch ID is required'),
   status: AttendanceStatusSchema,
   date: z.string().date().optional(), // Optional, defaults to today on backend
   remarks: z.string().nullable().optional(),
+}).refine((data) => data.lead_id || data.student_id, {
+  message: "Either lead_id or student_id is required",
 });
 
 export type AttendanceCreate = z.infer<typeof AttendanceCreateSchema>;

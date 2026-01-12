@@ -5,7 +5,120 @@ Framework-agnostic analytics utilities.
 from sqlmodel import Session, select, func, and_, or_
 from typing import Dict, List, Tuple, Optional
 from datetime import datetime, timedelta, date, time
-from backend.models import Lead, AuditLog, Batch, BatchCoachLink, Attendance, User, Center
+from backend.models import Lead, AuditLog, Batch, BatchCoachLink, Attendance, User, Center, Student, StudentBatchLink
+
+
+def get_student_milestones(db: Session, student_id: int) -> Dict[str, any]:
+    """
+    Calculate milestones for a student based on attendance.
+    
+    Args:
+        db: Database session
+        student_id: Student ID
+        
+    Returns:
+        Dictionary with:
+        - total_present: Total number of 'Present' attendance records
+        - current_milestone: The milestone the student is closest to (10, 25, 50, 100)
+        - next_milestone: The next milestone to reach
+        - sessions_until_next: Number of sessions needed to reach next milestone
+        - report_unlocked: True if student has reached a 15-session milestone with no report yet
+        - current_session_count: Total 'Present' sessions
+        - sessions_until_next_report: Sessions needed until next 15-session milestone
+    """
+    from backend.models import Student
+    
+    # Count 'Present' attendance records
+    total_present = db.exec(
+        select(func.count(Attendance.id)).where(
+            Attendance.student_id == student_id,
+            Attendance.status == 'Present'
+        )
+    ).first() or 0
+    
+    # Get student to access skill reports from Lead's extra_data (reports are stored there)
+    student = db.get(Student, student_id)
+    skill_reports = []
+    
+    # Skill reports are stored in Lead.extra_data, so we need to get the lead
+    if student and student.lead_id:
+        from backend.models import Lead
+        lead = db.get(Lead, student.lead_id)
+        if lead and lead.extra_data and isinstance(lead.extra_data, dict):
+            skill_reports = lead.extra_data.get('skill_reports', [])
+    
+    # Check existing report milestones (15, 30, 45, 60, etc.)
+    existing_report_milestones = set()
+    for report in skill_reports:
+        if isinstance(report, dict) and 'milestone_sessions' in report:
+            existing_report_milestones.add(report['milestone_sessions'])
+    
+    # Calculate report milestones (multiples of 15)
+    report_milestones = [15, 30, 45, 60, 75, 90, 105, 120]  # Can extend as needed
+    report_unlocked = False
+    sessions_until_next_report = None
+    next_report_milestone = None
+    highest_unreported_milestone = None
+    milestone_debt = []  # Track all unreported milestones that have been passed
+    
+    # MILESTONE DEBT SYSTEM: Check ALL milestones the student has passed
+    # If they're at 17 sessions and passed 15 but haven't reported it, report_unlocked should stay True
+    for milestone in sorted(report_milestones, reverse=True):
+        if total_present >= milestone:
+            # Student has reached this milestone
+            if milestone not in existing_report_milestones:
+                # This milestone hasn't been reported yet - it's a debt
+                milestone_debt.append(milestone)
+                if highest_unreported_milestone is None:
+                    highest_unreported_milestone = milestone
+    
+    # If there are any unreported milestones (debt), unlock the report
+    if milestone_debt:
+        report_unlocked = True
+    
+    # Find the next milestone to reach (for progress display)
+    for milestone in report_milestones:
+        if total_present < milestone:
+            next_report_milestone = milestone
+            sessions_until_next_report = milestone - total_present
+            break
+    
+    # If student is past a milestone but hasn't reported it, show debt status
+    if highest_unreported_milestone and total_present > highest_unreported_milestone:
+        # Student is past the milestone but hasn't reported it
+        # Calculate how many sessions past the milestone
+        sessions_past_milestone = total_present - highest_unreported_milestone
+        # For display purposes, set sessions_until_next_report to 0 to indicate debt
+        sessions_until_next_report = 0
+    
+    # Legacy milestone values (10, 25, 50, 100) for celebration
+    milestone_values = [10, 25, 50, 100]
+    current_milestone = None
+    next_milestone = None
+    sessions_until_next = None
+    
+    # Find current and next milestone
+    for milestone in milestone_values:
+        if total_present >= milestone:
+            current_milestone = milestone
+        else:
+            next_milestone = milestone
+            sessions_until_next = milestone - total_present
+            break
+    
+    return {
+        "total_present": total_present,
+        "current_session_count": total_present,  # Alias for clarity
+        "current_milestone": current_milestone,
+        "next_milestone": next_milestone,
+        "sessions_until_next": sessions_until_next,
+        "report_unlocked": report_unlocked,
+        "sessions_until_next_report": sessions_until_next_report,
+        "next_report_milestone": next_report_milestone,
+        "highest_unreported_milestone": highest_unreported_milestone,  # For debt display
+        "milestone_debt": milestone_debt,  # List of all unreported milestones passed
+        "has_milestone_debt": len(milestone_debt) > 0,  # Boolean flag for easy checking
+    }
 
 
 def calculate_conversion_rates(db: Session, user_id: Optional[int] = None) -> Dict[str, float]:
@@ -297,22 +410,139 @@ def _get_sales_command_center_analytics(
         and l.status != "Joined"  # Already filtered by base_query, but explicit for clarity
     ])
     
-    # Count expiring soon (Joined leads with subscription_end_date between today and today + 7 days)
+    # Count expiring soon (Active students with subscription_end_date between today and today + 7 days)
     today_date = date.today()
     seven_days_from_today = today_date + timedelta(days=7)
-    # Need to query all Joined leads (not filtered by base_query which excludes Joined)
-    joined_query = select(Lead).where(Lead.status == "Joined")
+    
+    # Query Student table for expiring subscriptions
+    student_query = select(Student).where(
+        Student.is_active == True,
+        Student.subscription_end_date.isnot(None),
+        Student.subscription_end_date >= today_date,
+        Student.subscription_end_date <= seven_days_from_today
+    )
+    
+    # Filter by user's centers if not team_lead
     if user.role != "team_lead":
         center_ids = [c.id for c in user.centers]
         if center_ids:
-            joined_query = joined_query.where(Lead.center_id.in_(center_ids))
-    all_joined_leads = list(db.exec(joined_query).all())
-    expiring_soon_count = len([
-        l for l in all_joined_leads
-        if l.subscription_end_date
-        and l.subscription_end_date >= today_date
-        and l.subscription_end_date <= seven_days_from_today
-    ])
+            student_query = student_query.where(Student.center_id.in_(center_ids))
+            # Execute query and count
+            expiring_students = list(db.exec(student_query).all())
+            expiring_soon_count = len(expiring_students)
+        else:
+            # User has no centers, return 0
+            expiring_soon_count = 0
+    else:
+        # Team lead sees all centers
+        expiring_students = list(db.exec(student_query).all())
+        expiring_soon_count = len(expiring_students)
+    
+    # Nurture Re-engage: Count leads with status 'Nurture' where last_updated was > 5 days ago
+    five_days_ago = datetime.utcnow() - timedelta(days=5)
+    nurture_query = select(Lead).where(
+        Lead.status == "Nurture",
+        or_(
+            (Lead.last_updated.is_(None) & (Lead.created_time <= five_days_ago)),
+            (Lead.last_updated.isnot(None) & (Lead.last_updated <= five_days_ago))
+        )
+    )
+    
+    # Filter by user's centers if not team_lead
+    if user.role != "team_lead":
+        center_ids = [c.id for c in user.centers]
+        if center_ids:
+            nurture_query = nurture_query.where(Lead.center_id.in_(center_ids))
+            nurture_leads = list(db.exec(nurture_query).all())
+            nurture_reengage_count = len(nurture_leads)
+        else:
+            nurture_reengage_count = 0
+    else:
+        nurture_leads = list(db.exec(nurture_query).all())
+        nurture_reengage_count = len(nurture_leads)
+    
+    # On Break: Count all leads with status 'On Break'
+    on_break_query = select(Lead).where(Lead.status == "On Break")
+    
+    # Filter by user's centers if not team_lead
+    if user.role != "team_lead":
+        center_ids = [c.id for c in user.centers]
+        if center_ids:
+            on_break_query = on_break_query.where(Lead.center_id.in_(center_ids))
+            on_break_leads = list(db.exec(on_break_query).all())
+            on_break_count = len(on_break_leads)
+        else:
+            on_break_count = 0
+    else:
+        on_break_leads = list(db.exec(on_break_query).all())
+        on_break_count = len(on_break_leads)
+    
+    # Returning Soon: Count leads with status 'On Break' where next_followup_date is within next 7 days
+    seven_days_from_now = datetime.utcnow() + timedelta(days=7)
+    returning_soon_query = select(Lead).where(
+        Lead.status == "On Break",
+        Lead.next_followup_date.isnot(None),
+        Lead.next_followup_date >= datetime.utcnow(),
+        Lead.next_followup_date <= seven_days_from_now
+    )
+    
+    # Filter by user's centers if not team_lead
+    if user.role != "team_lead":
+        center_ids = [c.id for c in user.centers]
+        if center_ids:
+            returning_soon_query = returning_soon_query.where(Lead.center_id.in_(center_ids))
+            returning_soon_leads = list(db.exec(returning_soon_query).all())
+            returning_soon_count = len(returning_soon_leads)
+        else:
+            returning_soon_count = 0
+    else:
+        returning_soon_leads = list(db.exec(returning_soon_query).all())
+        returning_soon_count = len(returning_soon_leads)
+    
+    # Milestones: Count students who hit a milestone (10, 25, 50, 100 sessions) in the last 7 days
+    milestones_count = 0
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    
+    # Get all active students
+    all_students_query = select(Student).where(Student.is_active == True)
+    if user.role != "team_lead":
+        center_ids = [c.id for c in user.centers]
+        if center_ids:
+            all_students_query = all_students_query.where(Student.center_id.in_(center_ids))
+    
+    all_students = list(db.exec(all_students_query).all())
+    
+    for student in all_students:
+        # Count 'Present' attendance records for this student
+        present_count = db.exec(
+            select(func.count(Attendance.id)).where(
+                Attendance.student_id == student.id,
+                Attendance.status == 'Present'
+            )
+        ).first() or 0
+        
+        # Check if this student hit a milestone (10, 25, 50, 100)
+        milestone_values = [10, 25, 50, 100]
+        hit_milestone = False
+        
+        for milestone in milestone_values:
+            # Check if student just crossed this milestone (between milestone and milestone + 7 sessions)
+            if present_count >= milestone and present_count < milestone + 7:
+                # Check if there's an attendance record in the last 7 days
+                recent_attendance = db.exec(
+                    select(Attendance).where(
+                        Attendance.student_id == student.id,
+                        Attendance.status == 'Present',
+                        Attendance.date >= seven_days_ago.date()
+                    ).order_by(Attendance.date.desc()).limit(1)
+                ).first()
+                
+                if recent_attendance:
+                    hit_milestone = True
+                    break
+        
+        if hit_milestone:
+            milestones_count += 1
     
     return {
         "today_progress": round(today_progress, 1),
@@ -327,6 +557,10 @@ def _get_sales_command_center_analytics(
         "reschedule_count": reschedule_count,
         "post_trial_no_response_count": post_trial_no_response_count,
         "expiring_soon_count": expiring_soon_count,
+        "nurture_reengage_count": nurture_reengage_count,
+        "milestones_count": milestones_count,
+        "on_break_count": on_break_count,
+        "returning_soon_count": returning_soon_count,
     }
 
 

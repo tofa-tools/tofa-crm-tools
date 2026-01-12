@@ -10,10 +10,28 @@ def mask_lead_for_coach(lead: Lead) -> Dict[str, Any]:
     Convert a Lead model to a dictionary with sensitive fields masked for coaches.
     Returns a dict suitable for JSON serialization with phone, email, and address hidden.
     """
+    from datetime import datetime, timezone
+    from typing import Optional
+    
+    def format_datetime(dt: Optional[datetime]) -> Optional[str]:
+        """Format datetime to ISO string with timezone if needed."""
+        if dt is None:
+            return None
+        # If datetime is naive (no timezone), assume it's UTC and make it timezone-aware
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        # Return ISO format with 'Z' suffix for UTC (more compatible with Zod)
+        iso_str = dt.isoformat()
+        # Ensure it ends with 'Z' if it's UTC (Zod prefers this format)
+        if dt.tzinfo == timezone.utc and not iso_str.endswith('Z'):
+            # Replace +00:00 with Z for better Zod compatibility
+            iso_str = iso_str.replace('+00:00', 'Z')
+        return iso_str
+    
     lead_dict = {
         "id": lead.id,
-        "created_time": lead.created_time.isoformat() if lead.created_time else None,
-        "last_updated": lead.last_updated.isoformat() if lead.last_updated else None,
+        "created_time": format_datetime(lead.created_time),
+        "last_updated": format_datetime(lead.last_updated),
         "player_name": lead.player_name,
         "player_age_category": lead.player_age_category,
         "date_of_birth": lead.date_of_birth.isoformat() if lead.date_of_birth else None,
@@ -21,8 +39,7 @@ def mask_lead_for_coach(lead: Lead) -> Dict[str, Any]:
         "email": None,  # Masked
         "address": None,  # Masked
         "status": lead.status,
-        "next_followup_date": lead.next_followup_date.isoformat() if lead.next_followup_date else None,
-        "score": lead.score,
+        "next_followup_date": format_datetime(lead.next_followup_date),
         "extra_data": lead.extra_data or {},
         "center_id": lead.center_id,
         "trial_batch_id": lead.trial_batch_id,
@@ -35,6 +52,7 @@ def mask_lead_for_coach(lead: Lead) -> Dict[str, Any]:
         "loss_reason_notes": lead.loss_reason_notes,
         "reschedule_count": lead.reschedule_count if hasattr(lead, 'reschedule_count') else 0,
         "do_not_contact": lead.do_not_contact,
+        "student_batch_ids": [],  # Empty list for leads (batches are on Student model)
     }
     return lead_dict
 
@@ -50,6 +68,23 @@ def serialize_leads_for_user(leads: List[Lead], user_role: str) -> List[Dict[str
     Returns:
         List of dictionaries suitable for JSON serialization
     """
+    from datetime import datetime, timezone
+    
+    def format_datetime(dt: Optional[datetime]) -> Optional[str]:
+        """Format datetime to ISO string with timezone if needed."""
+        if dt is None:
+            return None
+        # If datetime is naive (no timezone), assume it's UTC and make it timezone-aware
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        # Return ISO format with 'Z' suffix for UTC (more compatible with Zod)
+        iso_str = dt.isoformat()
+        # Ensure it ends with 'Z' if it's UTC (Zod prefers this format)
+        if dt.tzinfo == timezone.utc and not iso_str.endswith('Z'):
+            # Replace +00:00 with Z for better Zod compatibility
+            iso_str = iso_str.replace('+00:00', 'Z')
+        return iso_str
+    
     if user_role == "coach":
         return [mask_lead_for_coach(lead) for lead in leads]
     else:
@@ -57,8 +92,8 @@ def serialize_leads_for_user(leads: List[Lead], user_role: str) -> List[Dict[str
         return [
             {
                 "id": lead.id,
-                "created_time": lead.created_time.isoformat() if lead.created_time else None,
-                "last_updated": lead.last_updated.isoformat() if lead.last_updated else None,
+                "created_time": format_datetime(lead.created_time),
+                "last_updated": format_datetime(lead.last_updated),
                 "player_name": lead.player_name,
                 "player_age_category": lead.player_age_category,
                 "date_of_birth": lead.date_of_birth.isoformat() if lead.date_of_birth else None,
@@ -66,8 +101,7 @@ def serialize_leads_for_user(leads: List[Lead], user_role: str) -> List[Dict[str
                 "email": lead.email,
                 "address": lead.address,
                 "status": lead.status,
-                "next_followup_date": lead.next_followup_date.isoformat() if lead.next_followup_date else None,
-                "score": lead.score,
+                "next_followup_date": format_datetime(lead.next_followup_date),
                 "extra_data": lead.extra_data or {},
                 "center_id": lead.center_id,
                 "trial_batch_id": lead.trial_batch_id,
@@ -80,7 +114,25 @@ def serialize_leads_for_user(leads: List[Lead], user_role: str) -> List[Dict[str
                 "loss_reason_notes": lead.loss_reason_notes,
                 "reschedule_count": lead.reschedule_count if hasattr(lead, 'reschedule_count') else 0,
                 "do_not_contact": lead.do_not_contact,
+                "student_batch_ids": [],  # Empty list for leads (batches are on Student model)
             }
             for lead in leads
         ]
+
+
+def mask_student_for_coach(student_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Mask sensitive fields in a student data dictionary for coaches.
+    
+    Args:
+        student_data: Dictionary containing student data (typically from StudentRead model)
+        
+    Returns:
+        Dictionary with lead_phone, lead_email, and lead_address set to None
+    """
+    masked_data = student_data.copy()
+    masked_data["lead_phone"] = None
+    masked_data["lead_email"] = None
+    masked_data["lead_address"] = None
+    return masked_data
 

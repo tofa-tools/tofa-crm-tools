@@ -76,9 +76,16 @@ def record_attendance(
     if not batch:
         raise ValueError(f"Batch {batch_id} not found")
     
+    # Check if this lead has been converted to a student
+    from backend.models import Student
+    student = db.exec(
+        select(Student).where(Student.lead_id == lead_id)
+    ).first()
+    
     # Create attendance record
     attendance = Attendance(
         lead_id=lead_id,
+        student_id=student.id if student else None,  # Set student_id if converted to student
         batch_id=batch_id,
         user_id=user_id,
         date=date,
@@ -95,7 +102,7 @@ def record_attendance(
         lead.status = "Trial Attended"
         lead.last_updated = datetime.utcnow()
         
-        # Set next_followup_date to 24 hours from now for Present
+        # Set next_followup_date to 24 hours from now for Present (triggers Hot card for Sales)
         from datetime import timedelta
         lead.next_followup_date = datetime.utcnow() + timedelta(hours=24)
         
@@ -118,17 +125,29 @@ def record_attendance(
         player_name = lead.player_name
         batch_name = batch.name
         
+        # Log status change using proper audit function
+        from backend.core.audit import log_status_change
+        log_status_change(
+            db=db,
+            lead_id=lead_id,
+            user_id=user_id,
+            old_status=old_status,
+            new_status="Trial Attended"
+        )
+        
         log_lead_activity(
             db=db,
             lead_id=lead_id,
             user_id=user_id,
             action_type="status_change",
-            description=f"Lead status automatically promoted to Trial Attended after successful check-in by Coach {coach_name}",
+            description=f"Lead status automatically promoted to Trial Attended after successful check-in by Coach {coach_name} for {batch_name}. Next follow-up set to 24 hours (Hot card triggered)",
             old_value=old_status,
             new_value="Trial Attended"
         )
-    elif status == "Absent":
-        # Set next_followup_date to exactly tomorrow at 10:00 AM for Absent
+    elif status == "Absent" and lead.status == "Trial Scheduled":
+        # For Trial Scheduled leads who are absent:
+        # Keep status as 'Trial Scheduled'
+        # Automatically move next_followup_date to Tomorrow at 10:00 AM (triggers Reschedule card)
         from datetime import timedelta, time as dt_time
         tomorrow = date + timedelta(days=1)
         lead.next_followup_date = datetime.combine(tomorrow, dt_time(10, 0))
@@ -136,6 +155,22 @@ def record_attendance(
         
         # Increment reschedule_count for 2-strike rule
         lead.reschedule_count = (lead.reschedule_count or 0) + 1
+        
+        # Log the reschedule trigger
+        coach = db.get(User, user_id)
+        coach_name = coach.full_name if coach else f"Coach {user_id}"
+        player_name = lead.player_name
+        batch_name = batch.name
+        
+        log_lead_activity(
+            db=db,
+            lead_id=lead_id,
+            user_id=user_id,
+            action_type="attendance_reschedule",
+            description=f"Trial student {player_name} was absent. Next follow-up scheduled for tomorrow at 10:00 AM (Reschedule card triggered)",
+            old_value=None,
+            new_value=f"Reschedule scheduled for {tomorrow.isoformat()} 10:00 AM"
+        )
         
         # 2-Strike Rule: If reschedule_count >= 2, auto-mark as Dead
         if lead.reschedule_count >= 2:
@@ -145,9 +180,16 @@ def record_attendance(
             lead.loss_reason = "Repeated No-Show"
             lead.loss_reason_notes = f"Automatically marked as Dead after {lead.reschedule_count} absences"
             
-            # Log the automatic status change
-            coach = db.get(User, user_id)
-            coach_name = coach.full_name if coach else f"Coach {user_id}"
+            # Log the automatic status change using proper audit function
+            from backend.core.audit import log_status_change
+            log_status_change(
+                db=db,
+                lead_id=lead_id,
+                user_id=user_id,
+                old_status=old_status,
+                new_status="Dead/Not Interested"
+            )
+            
             log_lead_activity(
                 db=db,
                 lead_id=lead_id,

@@ -2,8 +2,9 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { subscriptionsAPI } from '@/lib/api';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
+import { subscriptionsAPI, approvalsAPI } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
 import toast from 'react-hot-toast';
 
 interface ExecutiveData {
@@ -70,7 +71,18 @@ interface ExecutiveDashboardProps {
 export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
   const [isRunningExpiryCheck, setIsRunningExpiryCheck] = useState(false);
+
+  // Fetch pending approvals count (team leads only)
+  const { data: pendingApprovalsData } = useQuery({
+    queryKey: ['approvals', 'pending'],
+    queryFn: () => approvalsAPI.getPendingRequests(),
+    enabled: user?.role === 'team_lead',
+    refetchInterval: 60000, // Refetch every minute
+  });
+  
+  const pendingApprovalsCount = pendingApprovalsData?.count || 0;
   
   if (!executiveData) {
     return (
@@ -113,9 +125,34 @@ export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
     // Navigate to Batches management page
     router.push('/batches');
   };
-  
+
   return (
     <div className="space-y-6">
+      {/* Pending Approvals Metric Card (Team Leads Only) */}
+      {user?.role === 'team_lead' && pendingApprovalsCount > 0 && (
+        <div
+          onClick={() => router.push('/approvals')}
+          className="bg-gradient-to-r from-yellow-400 to-orange-400 rounded-lg shadow-lg p-6 cursor-pointer hover:shadow-xl transition-shadow border-2 border-yellow-300"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <span className="text-4xl">⚖️</span>
+              <div>
+                <h2 className="text-xl font-bold text-white">Pending Approvals</h2>
+                <p className="text-yellow-100 text-sm mt-1">Status reversal requests awaiting your review</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className="text-5xl font-black text-white">{pendingApprovalsCount}</p>
+              <p className="text-yellow-100 text-sm mt-1">
+                {pendingApprovalsCount === 1 ? 'request' : 'requests'}
+              </p>
+            </div>
+          </div>
+          <p className="text-yellow-100 text-xs mt-4 italic">Click to review and approve/reject requests</p>
+        </div>
+      )}
+
       {/* Data Health Alerts */}
       <div className="bg-white rounded-lg shadow p-6 border-l-4 border-red-500">
         <div className="flex items-center justify-between mb-4">
@@ -194,8 +231,9 @@ export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
               </div>
             )}
           </div>
-        </div>
-      )}
+          </>
+        )}
+      </div>
       
       {/* This Month's Performance */}
       {(executiveData.top_closers || executiveData.speed_demons || executiveData.coach_compliance_list) && (

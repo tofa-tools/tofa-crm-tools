@@ -28,7 +28,7 @@ export default function ImportPage() {
 
   useEffect(() => {
     if (user && user.role !== 'team_lead') {
-      router.push('/dashboard');
+      router.push('/command-center');
     }
   }, [user, router]);
 

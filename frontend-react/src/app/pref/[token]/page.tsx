@@ -42,7 +42,6 @@ export default function PreferencePage() {
   const [submitted, setSubmitted] = useState(false);
   
   const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null);
-  const [selectedDemoBatchId, setSelectedDemoBatchId] = useState<number | null>(null);
   const [callTime, setCallTime] = useState('');
   const [notes, setNotes] = useState('');
   const [showLossReason, setShowLossReason] = useState(false);
@@ -65,7 +64,6 @@ export default function PreferencePage() {
         const response = await axios.get(`${API_URL}/public/lead-preferences/${token}`);
         setData(response.data);
         setSelectedBatchId(response.data.preferred_batch_id);
-        setSelectedDemoBatchId(response.data.preferred_demo_batch_id || null);
         setCallTime(response.data.preferred_call_time || '');
         setNotes(response.data.preferred_timing_notes || '');
       } catch (error: any) {
@@ -95,7 +93,7 @@ export default function PreferencePage() {
     try {
       await axios.put(`${API_URL}/public/lead-preferences/${token}`, {
         preferred_batch_id: selectedBatchId || null,
-        preferred_demo_batch_id: selectedDemoBatchId || null,
+        preferred_demo_batch_id: null, // Removed - no longer used
         preferred_call_time: callTime || null,
         preferred_timing_notes: notes || null,
         loss_reason: showLossReason ? lossReason : null,
@@ -186,75 +184,58 @@ export default function PreferencePage() {
               {data.batches.length === 0 ? (
                 <p className="text-gray-500 text-center py-4">No batches available for this age category</p>
               ) : (
-                data.batches.map((batch) => (
-                  <label
-                    key={batch.id}
-                    className={`flex items-start p-4 border-2 rounded-lg cursor-pointer transition-all ${
-                      selectedBatchId === batch.id
-                        ? 'border-blue-500 bg-blue-50'
-                        : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="batch"
-                      value={batch.id}
-                      checked={selectedBatchId === batch.id}
-                      onChange={() => setSelectedBatchId(batch.id)}
-                      className="mt-1 h-4 w-4 text-blue-600 focus:ring-blue-500"
-                    />
-                    <div className="ml-3 flex-1">
-                      <div className="font-semibold text-gray-900">{batch.name}</div>
-                      <div className="text-sm text-gray-600 mt-1">
-                        <span className="font-medium">Days:</span> {batch.schedule}
-                      </div>
-                      {batch.time && (
-                        <div className="text-sm text-gray-600">
-                          <span className="font-medium">Time:</span> {batch.time}
+                data.batches.map((batch) => {
+                  // TODO: Replace with actual enrollment data when available
+                  // For now, using a simple heuristic: show "Almost Full" for batches with small capacity
+                  // This should be replaced with: (current_enrollment / max_capacity) >= 0.8
+                  const isAlmostFull = batch.max_capacity <= 20; // Simple heuristic - replace with real data
+                  
+                  return (
+                    <label
+                      key={batch.id}
+                      className={`flex items-start p-5 border-2 rounded-lg cursor-pointer transition-all ${
+                        selectedBatchId === batch.id
+                          ? 'border-blue-500 bg-blue-50 shadow-md'
+                          : 'border-gray-200 hover:border-gray-300 hover:shadow-sm'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="batch"
+                        value={batch.id}
+                        checked={selectedBatchId === batch.id}
+                        onChange={() => setSelectedBatchId(batch.id)}
+                        className="mt-1 h-5 w-5 text-blue-600 focus:ring-blue-500"
+                      />
+                      <div className="ml-4 flex-1">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="font-bold text-lg text-gray-900">{batch.name}</div>
+                          {isAlmostFull && (
+                            <span className="px-2 py-1 text-xs font-semibold text-orange-700 bg-orange-100 rounded-full">
+                              ⚠️ Almost Full
+                            </span>
+                          )}
                         </div>
-                      )}
-                      <div className="text-xs text-gray-500 mt-1">
-                        Age Category: {batch.age_category}
+                        <div className="space-y-1.5">
+                          {batch.time && (
+                            <div className="text-base font-semibold text-gray-800">
+                              🕐 <span className="text-blue-600">{batch.time}</span>
+                            </div>
+                          )}
+                          <div className="text-base font-semibold text-gray-800">
+                            📅 <span className="text-indigo-600">{batch.schedule}</span>
+                          </div>
+                        </div>
+                        <div className="text-xs text-gray-500 mt-2">
+                          Age Category: {batch.age_category} • Max Capacity: {batch.max_capacity}
+                        </div>
                       </div>
-                    </div>
-                  </label>
-                ))
+                    </label>
+                  );
+                })
               )}
             </div>
           </div>
-          
-          {/* Preferred Demo Class Timing */}
-          {data.demo_batches && data.demo_batches.length > 0 && (
-            <div>
-              <label htmlFor="demoBatch" className="block text-sm font-medium text-gray-700 mb-2">
-                Preferred Demo Class Timing
-                {data.player_age_category && (
-                  <span className="text-xs text-gray-500 ml-2">
-                    (Showing batches for {data.player_age_category} {data.demo_batches.some(b => b.is_different_age) ? 'and nearest age categories' : ''})
-                  </span>
-                )}
-              </label>
-              <select
-                id="demoBatch"
-                value={selectedDemoBatchId || ''}
-                onChange={(e) => setSelectedDemoBatchId(e.target.value ? parseInt(e.target.value) : null)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              >
-                <option value="">Select a demo class timing...</option>
-                {data.demo_batches.map((batch) => (
-                  <option key={batch.id} value={batch.id}>
-                    {batch.name} - {batch.schedule} {batch.time && `(${batch.time})`}
-                    {batch.is_different_age && ` [${batch.age_category}]`}
-                  </option>
-                ))}
-              </select>
-              {data.demo_batches.some(b => b.is_different_age) && (
-                <p className="mt-1 text-xs text-amber-600">
-                  ⚠️ Some batches shown are from nearest age categories as exact match is not available
-                </p>
-              )}
-            </div>
-          )}
           
           {/* Call Time */}
           <div>

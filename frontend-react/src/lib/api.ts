@@ -16,6 +16,7 @@ import type {
 } from '@/types';
 import { LeadSchema, UserSchema, AuditLogSchema, ImportPreviewResponseSchema } from '@/lib/schemas';
 import { z } from 'zod';
+import { supabase } from '@/lib/supabase';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
@@ -43,15 +44,39 @@ apiClient.interceptors.request.use(
   }
 );
 
+// Helper function to check if token is expired
+function isTokenExpired(token: string): boolean {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    const exp = payload.exp * 1000; // Convert to milliseconds
+    const now = Date.now();
+    // Consider token expired if it expires within 1 minute (buffer)
+    return now >= (exp - 60000);
+  } catch (error) {
+    return true; // If we can't parse, consider it expired
+  }
+}
+
 // Response interceptor for error handling
 apiClient.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
     if (error.response?.status === 401 && typeof window !== 'undefined') {
-      // Handle unauthorized - redirect to login
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      window.location.href = '/login';
+      // Check if token exists and is expired (vs other 401 errors)
+      const token = localStorage.getItem('token');
+      if (token && isTokenExpired(token)) {
+        console.log('Token expired, logging out');
+      } else {
+        console.log('Unauthorized (401) - token may be invalid');
+      }
+      
+      // Only auto-logout if it's a token expiration issue
+      // For other 401s (like invalid credentials), let the calling code handle it
+      if (token) {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.href = '/login';
+      }
     }
     return Promise.reject(error);
   }
@@ -92,7 +117,7 @@ export type LeadsResponse = z.infer<typeof LeadsResponseSchema>;
 // Leads API
 export const leadsAPI = {
   getMyLeads: async (params?: { limit?: number; offset?: number; status?: string; search?: string; sort_by?: string; next_follow_up_date?: string; filter?: string; loss_reason?: string }): Promise<LeadsResponse> => {
-    // sort_by can be: "created_time", "freshness", or "score"
+    // sort_by can be: "created_time" or "freshness"
     const response = await apiClient.get<LeadsResponse>('/leads/my_leads', { params });
     // Validate API response with Zod - use safeParse to handle validation errors gracefully
     const validationResult = LeadsResponseSchema.safeParse(response.data);
@@ -125,6 +150,8 @@ export const leadsAPI = {
     if (update.subscription_plan) params.append('subscription_plan', update.subscription_plan);
     if (update.subscription_start_date) params.append('subscription_start_date', update.subscription_start_date);
     if (update.subscription_end_date) params.append('subscription_end_date', update.subscription_end_date);
+    if (update.payment_proof_url) params.append('payment_proof_url', update.payment_proof_url);
+    if (update.call_confirmation_note) params.append('call_confirmation_note', update.call_confirmation_note);
 
     const response = await apiClient.put(`/leads/${leadId}`, null, {
       params,
@@ -228,6 +255,105 @@ export const leadsAPI = {
     );
     return ImportPreviewResponseSchema.parse(response.data);
   },
+
+  sendNudge: async (leadId: number): Promise<{ message: string; nudge_count: number }> => {
+    const response = await apiClient.post<{ message: string; nudge_count: number }>(`/leads/${leadId}/nudge`);
+    return response.data;
+  },
+
+  convertLead: async (
+    leadId: number,
+    data: {
+      subscription_plan: string;
+      subscription_start_date: string;
+      subscription_end_date?: string;
+      payment_proof_url?: string;
+      student_batch_ids?: number[];
+    }
+  ): Promise<any> => {
+    const params = new URLSearchParams();
+    params.append('subscription_plan', data.subscription_plan);
+    params.append('subscription_start_date', data.subscription_start_date);
+    if (data.subscription_end_date) {
+      params.append('subscription_end_date', data.subscription_end_date);
+    }
+    if (data.payment_proof_url) {
+      params.append('payment_proof_url', data.payment_proof_url);
+    }
+    if (data.student_batch_ids && data.student_batch_ids.length > 0) {
+      params.append('student_batch_ids', data.student_batch_ids.join(','));
+    }
+
+    const response = await apiClient.post(`/leads/${leadId}/convert`, null, {
+      params,
+    });
+    return response.data;
+  },
+};
+
+// Students API
+export const studentsAPI = {
+  getStudents: async (params?: {
+    center_id?: number;
+    is_active?: boolean;
+  }): Promise<any[]> => {
+    const response = await apiClient.get<any[]>('/students', { params });
+    return response.data;
+  },
+
+  updateStudent: async (
+    studentId: number,
+    data: {
+      center_id?: number;
+      subscription_plan?: string;
+      subscription_start_date?: string;
+      subscription_end_date?: string;
+      payment_proof_url?: string;
+      student_batch_ids?: number[];
+      is_active?: boolean;
+    }
+  ): Promise<any> => {
+    const params = new URLSearchParams();
+    if (data.center_id !== undefined) params.append('center_id', String(data.center_id));
+    if (data.subscription_plan) params.append('subscription_plan', data.subscription_plan);
+    if (data.subscription_start_date) params.append('subscription_start_date', data.subscription_start_date);
+    if (data.subscription_end_date) params.append('subscription_end_date', data.subscription_end_date);
+    if (data.payment_proof_url) params.append('payment_proof_url', data.payment_proof_url);
+    if (data.is_active !== undefined) params.append('is_active', String(data.is_active));
+    if (data.student_batch_ids && data.student_batch_ids.length > 0) {
+      params.append('student_batch_ids', data.student_batch_ids.join(','));
+    }
+
+    const response = await apiClient.put(`/students/${studentId}`, null, {
+      params,
+    });
+    return response.data;
+  },
+
+  sendGraceNudge: async (studentId: number): Promise<{ message: string; grace_nudge_count: number }> => {
+    const response = await apiClient.post<{ message: string; grace_nudge_count: number }>(`/students/${studentId}/grace-nudge`);
+    return response.data;
+  },
+
+  recordRenewalIntent: async (token: string): Promise<{ message: string }> => {
+    const response = await apiClient.put<{ message: string }>(`/students/renew/${token}`);
+    return response.data;
+  },
+
+  getMilestones: async (studentId: number): Promise<{
+    total_present: number;
+    current_milestone: number | null;
+    next_milestone: number | null;
+    sessions_until_next: number | null;
+  }> => {
+    const response = await apiClient.get<{
+      total_present: number;
+      current_milestone: number | null;
+      next_milestone: number | null;
+      sessions_until_next: number | null;
+    }>(`/students/${studentId}/milestones`);
+    return response.data;
+  },
 };
 
 // Users API
@@ -241,6 +367,11 @@ export const usersAPI = {
     const response = await apiClient.post('/users/', userData);
     return response.data;
   },
+
+  updateUser: async (userId: number, userData: Partial<UserCreate>): Promise<User> => {
+    const response = await apiClient.put<User>(`/users/${userId}`, userData);
+    return response.data;
+  },
 };
 
 // Centers API
@@ -252,6 +383,11 @@ export const centersAPI = {
 
   createCenter: async (centerData: CenterCreate): Promise<Center> => {
     const response = await apiClient.post<Center>('/centers/', centerData);
+    return response.data;
+  },
+
+  updateCenter: async (centerId: number, centerData: Partial<CenterCreate>): Promise<Center> => {
+    const response = await apiClient.put<Center>(`/centers/${centerId}`, centerData);
     return response.data;
   },
 };
@@ -570,7 +706,8 @@ export const batchesAPI = {
 // Attendance API
 export const attendanceAPI = {
   checkIn: async (data: {
-    lead_id: number;
+    lead_id?: number;
+    student_id?: number;
     batch_id: number;
     status: string;
     date?: string;
@@ -578,13 +715,15 @@ export const attendanceAPI = {
   }): Promise<{
     status: string;
     attendance_id: number;
-    lead_id: number;
+    lead_id?: number;
+    student_id?: number;
     batch_id: number;
     date: string;
     status: string;
   }> => {
     const params = new URLSearchParams();
-    params.append('lead_id', String(data.lead_id));
+    if (data.lead_id) params.append('lead_id', String(data.lead_id));
+    if (data.student_id) params.append('student_id', String(data.student_id));
     params.append('batch_id', String(data.batch_id));
     params.append('status', data.status);
     if (data.date) params.append('date', data.date);
@@ -627,6 +766,120 @@ export const attendanceAPI = {
       }>;
       count: number;
     }>(`/attendance/history/${leadId}`);
+    return response.data;
+  },
+};
+
+// Subscriptions API
+export const subscriptionsAPI = {
+  runExpiryCheck: async (): Promise<{ expired_count: number }> => {
+    const response = await apiClient.post<{ expired_count: number }>('/subscriptions/run-expiry-check');
+    return response.data;
+  },
+};
+
+// File Upload API (Supabase Storage)
+export const uploadFile = async (file: File, bucketName: string = 'payment-proofs'): Promise<string> => {
+  if (!supabase) {
+    throw new Error('Supabase is not configured. Please set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY environment variables.');
+  }
+
+  try {
+    // Generate a unique filename
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 15)}.${fileExt}`;
+    const filePath = `${fileName}`;
+
+    // Upload file to Supabase Storage
+    const { data, error } = await supabase.storage
+      .from(bucketName)
+      .upload(filePath, file, {
+        cacheControl: '3600',
+        upsert: false,
+      });
+
+    if (error) {
+      throw new Error(`Upload failed: ${error.message}`);
+    }
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from(bucketName)
+      .getPublicUrl(filePath);
+
+    if (!urlData?.publicUrl) {
+      throw new Error('Failed to get public URL');
+    }
+
+    return urlData.publicUrl;
+  } catch (error) {
+    console.error('Error uploading file:', error);
+    throw error;
+  }
+};
+
+// Approvals API
+export const approvalsAPI = {
+  createRequest: async (data: {
+    lead_id: number;
+    current_status: string;
+    requested_status: string;
+    reason: string;
+  }): Promise<{ status: string; message: string; request_id: number }> => {
+    const params = new URLSearchParams();
+    params.append('lead_id', String(data.lead_id));
+    params.append('current_status', data.current_status);
+    params.append('requested_status', data.requested_status);
+    params.append('reason', data.reason);
+    
+    const response = await apiClient.post('/approvals/request', null, { params });
+    return response.data;
+  },
+  
+  getPendingRequests: async (): Promise<{
+    requests: Array<{
+      id: number;
+      lead_id: number;
+      lead_name: string;
+      requested_by_name: string;
+      current_status: string;
+      requested_status: string;
+      reason: string;
+      created_at: string;
+    }>;
+    count: number;
+  }> => {
+    const response = await apiClient.get('/approvals/pending');
+    return response.data;
+  },
+  
+  resolveRequest: async (
+    requestId: number,
+    approved: boolean,
+    resolutionNote?: string
+  ): Promise<{ status: string; message: string }> => {
+    const params = new URLSearchParams();
+    params.append('approved', String(approved));
+    if (resolutionNote) params.append('resolution_note', resolutionNote);
+    
+    const response = await apiClient.post(`/approvals/${requestId}/resolve`, null, { params });
+    return response.data;
+  },
+  
+  getLeadRequests: async (leadId: number): Promise<{
+    requests: Array<{
+      id: number;
+      current_status: string;
+      requested_status: string;
+      reason: string;
+      request_status: string;
+      requested_by_name: string;
+      resolved_by_name: string | null;
+      created_at: string;
+      resolved_at: string | null;
+    }>;
+  }> => {
+    const response = await apiClient.get(`/approvals/lead/${leadId}`);
     return response.data;
   },
 };

@@ -4,7 +4,6 @@ import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { StatusBadge } from '@/components/ui/StatusBadge';
-import { LeadScore } from '@/components/ui/LeadScore';
 import { BulkActionsToolbar } from '@/components/leads/BulkActionsToolbar';
 import { PlannerPane } from '@/components/leads/PlannerPane';
 import { ReferralModal } from '@/components/leads/ReferralModal';
@@ -12,6 +11,7 @@ import { AgeMigrationAlert } from '@/components/leads/AgeMigrationAlert';
 import { SkillReportModal } from '@/components/leads/SkillReportModal';
 import { LeadUpdateModal } from '@/components/leads/LeadUpdateModal';
 import { useLeads, usePrefetchNextPage } from '@/hooks/useLeads';
+import { useStudents } from '@/hooks/useStudents';
 import { useBatches } from '@/hooks/useBatches';
 import { useCenters } from '@/hooks/useCenters';
 import { useAuth } from '@/context/AuthContext';
@@ -50,11 +50,15 @@ export default function LeadsPage() {
   const [showSkillReportModal, setShowSkillReportModal] = useState(false);
   const [showStagingModal, setShowStagingModal] = useState(false);
   const [searchInputValue, setSearchInputValue] = useState(searchTerm);
+  
+  // Determine if we're viewing Active Students or Leads Pipeline
+  const isActiveStudentsView = statusFilter.length === 1 && statusFilter[0] === 'Joined';
 
   // --- Data Fetching ---
-  // Backend only supports 'created_time', 'freshness', or 'score'
+  // Backend only supports 'created_time' or 'freshness'
   // For 'status' sorting, we use 'created_time' as backend sort and handle status sorting on frontend
-  const backendSortBy = sortBy === 'status' ? 'created_time' : sortBy;
+  // Fallback to 'created_time' if invalid sortBy value is provided
+  const backendSortBy = sortBy === 'status' || sortBy === 'score' ? 'created_time' : sortBy;
   
   const queryParams = {
     limit: pageSize,
@@ -66,7 +70,30 @@ export default function LeadsPage() {
     ...(lossReasonFilter && { loss_reason: lossReasonFilter }),
   };
 
-  const { data: leadsResponse, isLoading } = useLeads(queryParams);
+  // Fetch leads (excluding 'Joined' status when in Leads Pipeline view)
+  const leadsQueryParams = isActiveStudentsView ? {} : {
+    ...queryParams,
+    // Exclude 'Joined' status when viewing Leads Pipeline
+    status: queryParams.status ? queryParams.status : undefined,
+  };
+  
+  // Filter out 'Joined' status from leads query for Pipeline view
+  const { data: leadsResponse, isLoading: leadsLoading } = useLeads(
+    isActiveStudentsView ? undefined : {
+      ...queryParams,
+      // Ensure we don't include 'Joined' in the status filter
+      status: statusFilter.length > 0 && !statusFilter.includes('Joined' as LeadStatus) 
+        ? statusFilter.join(',') 
+        : undefined,
+    }
+  );
+  
+  // Fetch students when in Active Students view
+  const { data: studentsData, isLoading: studentsLoading } = useStudents(
+    isActiveStudentsView ? { is_active: true } : undefined
+  );
+  
+  const isLoading = isActiveStudentsView ? studentsLoading : leadsLoading;
   
   const { data: stagingLeadsData } = useQuery({
     queryKey: ['stagingLeads'],
@@ -76,13 +103,35 @@ export default function LeadsPage() {
 
   const prefetchNextPage = usePrefetchNextPage(queryParams, pageSize);
 
-  const leadsData = leadsResponse?.leads || [];
-  const totalLeads = leadsResponse?.total || 0;
+  // Use students data when in Active Students view, otherwise use leads
+  const leadsData = isActiveStudentsView 
+    ? (studentsData || []).map((student: any) => ({
+        id: student.lead_id, // Use lead_id for compatibility
+        player_name: student.lead_player_name || 'Unknown',
+        status: 'Joined' as LeadStatus,
+        subscription_plan: student.subscription_plan,
+        subscription_end_date: student.subscription_end_date,
+        student_batch_ids: student.student_batch_ids || [],
+        // Add other required Lead fields with defaults
+        player_age_category: '',
+        phone: '',
+        email: null,
+        address: null,
+        created_time: student.created_at,
+        center_id: student.center_id,
+      }))
+    : (leadsResponse?.leads || []).filter((lead: Lead) => lead.status !== 'Joined'); // Filter out Joined status
+  
+  const totalLeads = isActiveStudentsView 
+    ? (studentsData || []).length
+    : (leadsResponse?.total || 0);
   const totalPages = Math.ceil(totalLeads / pageSize);
   const stagingLeads = stagingLeadsData || [];
   
   const { data: batchesData } = useBatches();
   const allBatches = batchesData || [];
+  const { data: centersData } = useCenters();
+  const centers = centersData || [];
 
   const selectedLead = useMemo(() => 
     leadsData.find((l: Lead) => l.id === expandedLeadId) || null
@@ -141,12 +190,6 @@ export default function LeadsPage() {
         const bOrder = statusOrder[b.status] ?? 99;
         return isAsc ? aOrder - bOrder : bOrder - aOrder;
       });
-    } else if (sortBy === 'score') {
-      sorted.sort((a, b) => {
-        const aScore = a.score ?? 0;
-        const bScore = b.score ?? 0;
-        return isAsc ? aScore - bScore : bScore - aScore;
-      });
     } else if (sortBy === 'created_time') {
       sorted.sort((a, b) => {
         const aTime = a.created_time ? new Date(a.created_time).getTime() : 0;
@@ -200,13 +243,44 @@ export default function LeadsPage() {
             <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">👥 Lead Management</h1>
             <p className="text-gray-500 mt-1">Managing {totalLeads} records</p>
           </div>
-          <button 
-            onClick={() => setIsPlannerOpen(!isPlannerOpen)} 
-            className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl shadow-sm hover:bg-gray-50 font-medium"
-          >
-            <Calendar className="w-4 h-4" />
-            {isPlannerOpen ? 'Close Planner' : 'Open Planner'}
-          </button>
+          <div className="flex items-center gap-3">
+            {/* Pipeline/Students Toggle */}
+            <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl p-1 shadow-sm">
+              <button
+                onClick={() => {
+                  // Show leads pipeline (clear status filter to show all non-Joined leads)
+                  updateURLParams({ status: null, page: 1 });
+                }}
+                className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                  !isActiveStudentsView
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                Leads Pipeline
+              </button>
+              <button
+                onClick={() => {
+                  // Show Active Students (from Student table)
+                  updateURLParams({ status: 'Joined', page: 1 });
+                }}
+                className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                  isActiveStudentsView
+                    ? 'bg-indigo-600 text-white shadow-sm'
+                    : 'text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                Active Students
+              </button>
+            </div>
+            <button 
+              onClick={() => setIsPlannerOpen(!isPlannerOpen)} 
+              className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl shadow-sm hover:bg-gray-50 font-medium"
+            >
+              <Calendar className="w-4 h-4" />
+              {isPlannerOpen ? 'Close Planner' : 'Open Planner'}
+            </button>
+          </div>
         </div>
 
         {/* Staging Banner (Restored) */}
@@ -242,7 +316,6 @@ export default function LeadsPage() {
           >
             <option value="status">Sort by Status</option>
             <option value="created_time">Sort by Date</option>
-            <option value="score">Sort by Score</option>
           </select>
           <select 
             value={pageSize} 
@@ -272,24 +345,14 @@ export default function LeadsPage() {
                     onClick={() => handleSort('player_name')}
                   >
                     <div className="flex items-center gap-2">
-                      <span>Player</span>
+                      <span>Player Name</span>
                       {sortBy === 'player_name' && (
                         sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                       )}
                     </div>
                   </th>
-                  <th className="px-6 py-4 text-left">Contact</th>
-                  <th 
-                    className="px-6 py-4 text-left cursor-pointer hover:bg-gray-100 transition-colors select-none"
-                    onClick={() => handleSort('score')}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span>Score</span>
-                      {sortBy === 'score' && (
-                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                      )}
-                    </div>
-                  </th>
+                  <th className="px-6 py-4 text-left">Center</th>
+                  <th className="px-6 py-4 text-left">Phone</th>
                   <th 
                     className="px-6 py-4 text-left cursor-pointer hover:bg-gray-100 transition-colors select-none"
                     onClick={() => handleSort('status')}
@@ -301,13 +364,13 @@ export default function LeadsPage() {
                       )}
                     </div>
                   </th>
-                  <th className="px-6 py-4 text-left">Age</th>
+                  <th className="px-6 py-4 text-left">Trial Batch</th>
                   <th 
                     className="px-6 py-4 text-left cursor-pointer hover:bg-gray-100 transition-colors select-none"
                     onClick={() => handleSort('created_time')}
                   >
                     <div className="flex items-center gap-2">
-                      <span>Created Time</span>
+                      <span>Freshness</span>
                       {sortBy === 'created_time' && (
                         sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                       )}
@@ -318,13 +381,13 @@ export default function LeadsPage() {
                     onClick={() => handleSort('next_followup_date')}
                   >
                     <div className="flex items-center gap-2">
-                      <span>Follow-up</span>
+                      <span>Next Follow-up</span>
                       {sortBy === 'next_followup_date' && (
                         sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                       )}
                     </div>
                   </th>
-                  <th className="px-6 py-4 text-left">Trial Batch</th>
+                  <th className="px-6 py-4 text-left">Age Category</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
@@ -338,23 +401,34 @@ export default function LeadsPage() {
                       }} className="rounded border-gray-300 text-indigo-600" />
                     </td>
                     <td className="px-6 py-4 text-sm font-bold text-gray-900">{lead.player_name}</td>
+                    <td className="px-6 py-4 text-sm text-gray-500 font-medium">
+                      {centers.find(c => c.id === lead.center_id)?.display_name || '—'}
+                    </td>
                     <td className="px-6 py-4 text-sm text-gray-500">{user?.role === 'coach' ? '🔒 HIDDEN' : lead.phone || 'N/A'}</td>
-                    <td className="px-6 py-4"><LeadScore score={lead.score || 0} /></td>
                     <td className="px-6 py-4"><StatusBadge status={lead.status} /></td>
+                    <td className="px-6 py-4 text-sm text-gray-500 font-medium">
+                      {(() => {
+                        if (!lead.trial_batch_id) {
+                          if (lead.status === 'Trial Scheduled') {
+                            return <span className="text-red-600 font-semibold">⚠️ No Batch Assigned</span>;
+                          }
+                          return '—';
+                        }
+                        const batch = allBatches.find(b => b.id === lead.trial_batch_id);
+                        return batch?.name || `[ID: ${lead.trial_batch_id}]`;
+                      })()}
+                    </td>
+                    <td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(lead.created_time)}</td>
+                    <td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(lead.next_followup_date)}</td>
                     <td className="px-6 py-4">
                        <div className="flex items-center gap-2 text-sm text-gray-600">
                          {lead.player_age_category}
                          <AgeMigrationAlert leadId={lead.id} currentCategory={lead.player_age_category} dateOfBirth={lead.date_of_birth} playerName={lead.player_name} onCategoryUpdated={() => queryClient.invalidateQueries({ queryKey: ['leads'] })} />
                        </div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(lead.created_time)}</td>
-                    <td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(lead.next_followup_date)}</td>
-                    <td className="px-6 py-4 text-sm text-gray-500 font-medium">
-                      {allBatches.find(b => b.id === lead.trial_batch_id)?.name || '—'}
-                    </td>
                   </tr>
                 )) : (
-                  <tr><td colSpan={9} className="px-6 py-20 text-center text-gray-400 font-medium italic">No leads match your current search/filters.</td></tr>
+                  <tr><td colSpan={10} className="px-6 py-20 text-center text-gray-400 font-medium italic">No leads match your current search/filters.</td></tr>
                 )}
               </tbody>
             </table>

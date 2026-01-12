@@ -1,8 +1,11 @@
 'use client';
 
 import Link from 'next/link';
+import Image from 'next/image';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
+import { useQuery } from '@tanstack/react-query';
+import { approvalsAPI } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 interface NavItem {
@@ -13,7 +16,6 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  { label: 'Dashboard', href: '/dashboard', icon: '🏠' },
   // Check-In for coaches (first item for them)
   { label: 'Check-In', href: '/check-in', icon: '✅', roles: ['coach'] },
   { label: 'Command Center', href: '/command-center', icon: '🚀' },
@@ -37,6 +39,12 @@ const navItems: NavItem[] = [
     roles: ['team_lead'],
   },
   {
+    label: 'Approvals',
+    href: '/approvals',
+    icon: '⚖️',
+    roles: ['team_lead'],
+  },
+  {
     label: 'Import Data',
     href: '/import',
     icon: '📊',
@@ -53,6 +61,16 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
 
+  // Fetch pending approvals count (team leads only)
+  const { data: pendingApprovalsData } = useQuery({
+    queryKey: ['approvals', 'pending'],
+    queryFn: () => approvalsAPI.getPendingRequests(),
+    enabled: user?.role === 'team_lead',
+    refetchInterval: 60000, // Refetch every minute
+  });
+
+  const pendingApprovalsCount = pendingApprovalsData?.count || 0;
+
   const filteredNavItems = navItems.filter(
     (item) => !item.roles || (user && item.roles.includes(user.role))
   );
@@ -63,27 +81,56 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
       isCollapsed ? 'w-20' : 'w-64'
     )}>
       {/* Logo and Toggle */}
-      <div className="p-4 border-b border-gray-200">
+      <div className="p-4 border-b border-gray-200 bg-gradient-to-r from-tofa-navy to-indigo-950">
         {!isCollapsed && (
           <div className="text-center">
+            <Link
+              href="/command-center"
+              className="block cursor-pointer hover:opacity-90 transition-opacity mb-3"
+            >
+              <div className="flex justify-center mb-2">
+                <Image
+                  src="/logo.png"
+                  alt="TOFA Logo"
+                  width={80}
+                  height={80}
+                  className="object-contain"
+                  priority
+                />
+              </div>
+            </Link>
             <button
               onClick={onToggleCollapse}
-              className="cursor-pointer hover:opacity-80 transition-opacity mb-2"
+              className="text-xs text-white/70 hover:text-white transition-colors uppercase tracking-wider font-semibold"
               title="Collapse sidebar"
             >
-              <div className="text-4xl">⚽</div>
+              ← Collapse
             </button>
-            <h1 className="text-lg font-bold text-gray-900">TOFA Academy CRM</h1>
           </div>
         )}
         {isCollapsed && (
           <div className="text-center w-full">
+            <Link
+              href="/command-center"
+              className="block cursor-pointer hover:opacity-90 transition-opacity mb-3"
+            >
+              <div className="flex justify-center">
+                <Image
+                  src="/logo.png"
+                  alt="TOFA Logo"
+                  width={48}
+                  height={48}
+                  className="object-contain"
+                  priority
+                />
+              </div>
+            </Link>
             <button
               onClick={onToggleCollapse}
-              className="cursor-pointer hover:opacity-80 transition-opacity mx-auto"
+              className="text-xs text-white/70 hover:text-white transition-colors"
               title="Expand sidebar"
             >
-              <div className="text-3xl">⚽</div>
+              →
             </button>
           </div>
         )}
@@ -127,14 +174,23 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
                 'flex items-center gap-3 rounded-lg transition-colors relative group',
                 isCollapsed ? 'px-3 py-3 justify-center' : 'px-4 py-3',
                 isActive
-                  ? 'bg-gradient-primary text-white shadow-md'
-                  : 'text-gray-700 hover:bg-gray-100'
+                  ? 'bg-gradient-to-r from-tofa-gold/90 to-amber-600 text-tofa-navy shadow-md font-bold'
+                  : 'text-gray-700 hover:bg-tofa-gold/10 hover:text-tofa-navy'
               )}
               title={isCollapsed ? item.label : undefined}
             >
               <span className="text-xl">{item.icon}</span>
               {!isCollapsed && (
-                <span className="font-medium">{item.label}</span>
+                <span className="font-medium flex-1">{item.label}</span>
+              )}
+              {/* Badge for Approvals */}
+              {item.href === '/approvals' && pendingApprovalsCount > 0 && (
+                <span className={cn(
+                  'px-2 py-0.5 text-xs font-bold rounded-full',
+                  isActive ? 'bg-white/20 text-white' : 'bg-yellow-500 text-white'
+                )}>
+                  {pendingApprovalsCount}
+                </span>
               )}
               {/* Tooltip for collapsed state */}
               {isCollapsed && (

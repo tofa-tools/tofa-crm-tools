@@ -61,3 +61,52 @@ def create_center(
     db.refresh(new_center)
     return new_center
 
+
+def update_center(
+    db: Session,
+    center_id: int,
+    display_name: Optional[str] = None,
+    meta_tag_name: Optional[str] = None,
+    city: Optional[str] = None,
+    location: Optional[str] = None
+) -> Center:
+    """
+    Update an existing center.
+    
+    Args:
+        db: Database session
+        center_id: ID of center to update
+        display_name: New display name (optional)
+        meta_tag_name: New meta tag name (optional, must be unique)
+        city: New city name (optional)
+        location: New location details (optional)
+        
+    Returns:
+        Updated Center object
+        
+    Raises:
+        ValueError: If center not found or meta_tag_name already exists
+    """
+    center = get_center_by_id(db, center_id)
+    if not center:
+        raise ValueError(f"Center {center_id} not found")
+    
+    # Check if meta_tag_name is being changed and if it conflicts
+    if meta_tag_name is not None and meta_tag_name != center.meta_tag_name:
+        existing = get_center_by_meta_tag(db, meta_tag_name)
+        if existing:
+            raise ValueError(f"Center with meta tag '{meta_tag_name}' already exists")
+        center.meta_tag_name = meta_tag_name
+    
+    if display_name is not None:
+        center.display_name = display_name
+    if city is not None:
+        center.city = city
+    if location is not None:
+        center.location = location
+    
+    db.add(center)
+    db.commit()
+    db.refresh(center)
+    return center
+

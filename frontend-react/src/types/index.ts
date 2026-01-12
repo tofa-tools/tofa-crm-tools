@@ -1,6 +1,6 @@
 // Re-export Zod schemas and types for backward compatibility
-export type { User, UserCreate, UserRole } from '@/lib/schemas/user';
-export { UserSchema, UserCreateSchema, UserRoleSchema } from '@/lib/schemas/user';
+export type { User, UserCreate, UserUpdate, UserRole } from '@/lib/schemas/user';
+export { UserSchema, UserCreateSchema, UserUpdateSchema, UserRoleSchema } from '@/lib/schemas/user';
 
 // Center types
 export interface Center {

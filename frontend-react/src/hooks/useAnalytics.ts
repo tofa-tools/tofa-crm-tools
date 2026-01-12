@@ -46,6 +46,7 @@ export function useCommandCenterAnalytics(targetDate?: string) {
     queryKey: ['analytics', 'command-center', targetDate],
     queryFn: () => analyticsAPI.getCommandCenter(targetDate),
     staleTime: 30 * 1000, // 30 seconds
+    refetchInterval: 30000, // Refetch every 30 seconds for real-time updates
   });
 }
 

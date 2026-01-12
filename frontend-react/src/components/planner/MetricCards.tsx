@@ -16,6 +16,10 @@ interface SalesMetrics {
   reschedule_count?: number;
   post_trial_no_response_count?: number;
   expiring_soon_count?: number;
+  nurture_reengage_count?: number;
+  milestones_count?: number;
+  on_break_count?: number;
+  returning_soon_count?: number;
 }
 
 interface CoachMetrics {
@@ -35,70 +39,56 @@ interface MetricCardsProps {
 
 export function MetricCards({ salesMetrics, coachMetrics, onMetricClick }: MetricCardsProps) {
   const { user } = useAuth();
-  const isSales = user?.role === 'team_lead' || user?.role === 'regular_user';
+  const isSales = user?.role === 'team_lead' || user?.role === 'regular_user' || user?.role === 'team_member';
   const isCoach = user?.role === 'coach';
 
   if (isSales && salesMetrics) {
+    // Calculate Action Pillars
+    const emergencyTotal = (salesMetrics.overdue || 0) + (salesMetrics.reschedule_count || 0);
+    const revenueTotal = (salesMetrics.hot_trials_count || 0) + (salesMetrics.expiring_soon_count || 0);
+    const pipelineTotal = (salesMetrics.unscheduled || 0) + (salesMetrics.post_trial_no_response_count || 0);
+    const retentionTotal = (salesMetrics.milestones_count || 0) + (salesMetrics.on_break_count || 0);
+
     return (
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-7 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* Pillar 1: Emergency */}
         <MetricCard
-          title="Today's Progress"
-          value={`${salesMetrics.today_progress.toFixed(0)}%`}
-          delta={`${salesMetrics.today_progress_count}/${salesMetrics.today_total_due} completed`}
-          icon="📊"
-          className="border-l-4 border-blue-500"
-        />
-        <MetricCard
-          title="Pending Trials"
-          value={salesMetrics.unscheduled}
-          delta="Not yet booked for trial"
-          icon="⏰"
-          className="border-l-4 border-orange-500 cursor-pointer hover:shadow-lg transition-shadow"
-          onClick={() => onMetricClick?.('unscheduled')}
-        />
-        <MetricCard
-          title="Overdue"
-          value={salesMetrics.overdue}
-          delta="Past due date"
-          icon="🔴"
-          className="border-l-4 border-red-500 cursor-pointer hover:shadow-lg transition-shadow"
+          title="🚨 Emergency"
+          value={emergencyTotal}
+          delta={`${salesMetrics.overdue || 0} Overdue • ${salesMetrics.reschedule_count || 0} Reschedule`}
+          icon="🚨"
+          className="border-l-4 border-red-500 cursor-pointer hover:shadow-xl transition-all"
           onClick={() => onMetricClick?.('overdue')}
         />
+        
+        {/* Pillar 2: Revenue */}
         <MetricCard
-          title="Trial Pulse"
-          value={`${salesMetrics.trial_show_up_rate.toFixed(0)}%`}
-          delta={`${salesMetrics.trial_show_up_count}/${salesMetrics.trial_total_scheduled} showed up`}
-          icon={
-            <div className="relative">
-              <span className="text-4xl">📈</span>
-              <span className="absolute top-0 right-0 w-3 h-3 bg-green-500 rounded-full animate-pulse"></span>
-            </div>
-          }
-          className="border-l-4 border-blue-500"
-        />
-        <MetricCard
-          title="🔥 Hot: Trial Attended"
-          value={salesMetrics.hot_trials_count || 0}
-          delta="Attended in last 24h"
-          icon="🔥"
-          className="border-l-4 border-orange-500 border-2 animate-pulse cursor-pointer hover:shadow-lg transition-shadow"
+          title="💰 Revenue"
+          value={revenueTotal}
+          delta={`${salesMetrics.hot_trials_count || 0} Hot Trials • ${salesMetrics.expiring_soon_count || 0} Renewals`}
+          icon="💰"
+          className="border-l-4 border-emerald-500 cursor-pointer hover:shadow-xl transition-all"
           onClick={() => onMetricClick?.('hot_trials')}
         />
+        
+        {/* Pillar 3: Pipeline */}
         <MetricCard
-          title="⚠️ Reschedule: No-Shows"
-          value={salesMetrics.reschedule_count || 0}
-          delta="Missed trials to reschedule"
-          icon="⚠️"
-          className="border-l-4 border-yellow-500 cursor-pointer hover:shadow-lg transition-shadow"
-          onClick={() => onMetricClick?.('reschedule')}
+          title="📊 Pipeline"
+          value={pipelineTotal}
+          delta={`${salesMetrics.unscheduled || 0} New Leads • ${salesMetrics.post_trial_no_response_count || 0} Pending Trials`}
+          icon="📊"
+          className="border-l-4 border-blue-500 cursor-pointer hover:shadow-xl transition-all"
+          onClick={() => onMetricClick?.('unscheduled')}
         />
+        
+        {/* Pillar 4: Retention */}
         <MetricCard
-          title="⏳ Renewals (7 Days)"
-          value={salesMetrics.expiring_soon_count || 0}
-          delta="Subscriptions expiring soon"
-          icon="⏳"
-          className="border-l-4 border-purple-500 cursor-pointer hover:shadow-lg transition-shadow"
-          onClick={() => onMetricClick?.('renewals')}
+          title="⭐ Retention"
+          value={retentionTotal}
+          delta={`${salesMetrics.milestones_count || 0} Milestones • ${salesMetrics.on_break_count || 0} On Break`}
+          icon="⭐"
+          className="border-l-4 border-amber-500 cursor-pointer hover:shadow-xl transition-all"
+          onClick={() => onMetricClick?.('milestones')}
         />
       </div>
     );

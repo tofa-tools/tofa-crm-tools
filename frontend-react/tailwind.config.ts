@@ -9,6 +9,33 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        // TOFA Brand Colors
+        'tofa-gold': {
+          DEFAULT: '#D4AF37',
+          50: '#faf7ed',
+          100: '#f5eed1',
+          200: '#ebdcab',
+          300: '#e0c97f',
+          400: '#d4af37',
+          500: '#c19d2a',
+          600: '#a08023',
+          700: '#7f641e',
+          800: '#6e541c',
+          900: '#5d4619',
+        },
+        'tofa-navy': {
+          DEFAULT: '#0A192F',
+          50: '#f0f4f8',
+          100: '#d9e2ec',
+          200: '#bcccdc',
+          300: '#9fb3c8',
+          400: '#829ab1',
+          500: '#627d98',
+          600: '#486581',
+          700: '#334e68',
+          800: '#243b53',
+          900: '#0A192F',
+        },
         primary: {
           50: '#f0f4ff',
           100: '#e0e9ff',
@@ -24,6 +51,8 @@ const config: Config = {
       },
       backgroundImage: {
         'gradient-primary': 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        'gradient-tofa-gold': 'linear-gradient(135deg, #D4AF37 0%, #c19d2a 50%, #a08023 100%)',
+        'gradient-tofa-navy': 'linear-gradient(135deg, #0A192F 0%, #243b53 50%, #334e68 100%)',
       },
     },
   },

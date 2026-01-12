@@ -5,7 +5,7 @@ Framework-agnostic lead CRUD operations.
 from sqlmodel import Session, select, func
 from typing import List, Optional, Tuple
 from datetime import datetime
-from backend.models import Lead, Center, Comment, User, BatchCoachLink, Batch, StudentBatchLink
+from backend.models import Lead, Center, Comment, User, BatchCoachLink, Batch, StudentBatchLink, Student
 from sqlalchemy import or_
 import pandas as pd
 import uuid
@@ -128,10 +128,8 @@ def get_leads_for_user(
     total = db.exec(count_query).one()
     
     # Apply ordering based on sort_by parameter
-    if sort_by == "score":
-        # Sort by score descending (highest first)
-        query = query.order_by(Lead.score.desc(), Lead.created_time.desc())
-    elif sort_by == "freshness":
+    # Supported values: "created_time" or "freshness"
+    if sort_by == "freshness":
         # Sort by freshness: oldest last_updated first (rotting leads at top), then by created_time
         # NULLS LAST ensures leads without last_updated go to the bottom
         # Use SQLAlchemy's nullslast() to handle NULL values
@@ -148,13 +146,22 @@ def get_leads_for_user(
     if limit is not None:
         query = query.limit(limit).offset(offset)
     
+    # Note: student_batches relationship moved to Student model
+    # No need to eager load it for Lead queries
+    
     leads = list(db.exec(query).all())
     return leads, total
 
 
 def get_lead_by_id(db: Session, lead_id: int) -> Optional[Lead]:
-    """Get a lead by ID."""
-    return db.get(Lead, lead_id)
+    """Get a lead by ID with relationships loaded."""
+    from sqlmodel import select
+    
+    # Note: student_batches relationship moved to Student model
+    # If needed, load Student relationship separately via lead.student.batches
+    stmt = select(Lead).where(Lead.id == lead_id)
+    result = db.exec(stmt).first()
+    return result
 
 
 def update_lead(
@@ -166,7 +173,10 @@ def update_lead(
     user_id: Optional[int] = None,
     player_age_category: Optional[str] = None,  # New parameter for age category update
     trial_batch_id: Optional[int] = None,  # New parameter for batch assignment
-    permanent_batch_id: Optional[int] = None  # New parameter for batch assignment
+    permanent_batch_id: Optional[int] = None,  # New parameter for batch assignment
+    student_batch_ids: Optional[List[int]] = None,  # Multi-batch assignment for joined students
+    payment_proof_url: Optional[str] = None,  # URL to payment proof image
+    call_confirmation_note: Optional[str] = None  # Note confirming call with parent
 ) -> Lead:
     """
     Update a lead's status and optionally add a comment.
@@ -198,13 +208,36 @@ def update_lead(
     old_next_date = lead.next_followup_date.isoformat() if lead.next_followup_date else None
     old_age_category = lead.player_age_category
     
-    # Validate Joined status requires permanent_batch_id BEFORE status change
+    # Validate Joined status requires batch assignment BEFORE status change
     if status == "Joined":
+        # Check if student_batch_ids is being provided (new multi-batch assignment)
+        if student_batch_ids is not None and len(student_batch_ids) > 0:
+            # Using new multi-batch assignment, validation passed
+            pass
         # Check if permanent_batch_id is being set in this update OR already exists
-        if permanent_batch_id is None or permanent_batch_id == 0:
-            # Not setting it now, check if it already exists
-            if not lead.permanent_batch_id:
+        elif permanent_batch_id is not None and permanent_batch_id != 0:
+            # Using old single batch assignment, validation passed
+            pass
+        # Check if lead already has a permanent_batch_id
+        elif lead.permanent_batch_id:
+            # Already has permanent batch, validation passed
+            pass
+        # Check if lead already has student_batch_ids (via StudentBatchLink)
+        else:
+            existing_student_links = db.exec(
+                select(StudentBatchLink).where(StudentBatchLink.lead_id == lead_id)
+            ).all()
+            if not existing_student_links:
+                # No batch assignment found, raise error
                 raise ValueError("BATCH_REQUIRED: A permanent batch must be assigned before setting status to 'Joined'.")
+    
+    # Validate Trial Scheduled status requires trial_batch_id
+    if status == "Trial Scheduled":
+        # Check if trial_batch_id is being set in this update OR already exists
+        if trial_batch_id is None or trial_batch_id == 0:
+            # Not setting it now, check if it already exists
+            if not lead.trial_batch_id:
+                raise ValueError("TRIAL_BATCH_REQUIRED: A trial batch must be assigned when status is 'Trial Scheduled'.")
     
     # Update status
     if lead.status != status:
@@ -212,8 +245,32 @@ def update_lead(
         # Auto-set do_not_contact for Dead/Not Interested status
         if status == "Dead/Not Interested":
             lead.do_not_contact = True
-            # Auto-clear next_followup_date for Dead status
-            if lead.next_followup_date:
+            # Auto-clear next_followup_date for Dead status (unless specific date provided)
+            if next_date is None and lead.next_followup_date:
+                old_date_str = lead.next_followup_date.isoformat()
+                lead.next_followup_date = None
+                if user_id:
+                    log_field_update(
+                        db, lead_id, user_id,
+                        'next_followup_date',
+                        old_date_str,
+                        None
+                    )
+        elif status == "Nurture":
+            # Auto-clear next_followup_date for Nurture status (unless specific date provided)
+            if next_date is None and lead.next_followup_date:
+                old_date_str = lead.next_followup_date.isoformat()
+                lead.next_followup_date = None
+                if user_id:
+                    log_field_update(
+                        db, lead_id, user_id,
+                        'next_followup_date',
+                        old_date_str,
+                        None
+                    )
+        elif status == "On Break":
+            # Auto-clear next_followup_date for On Break status (unless specific date provided)
+            if next_date is None and lead.next_followup_date:
                 old_date_str = lead.next_followup_date.isoformat()
                 lead.next_followup_date = None
                 if user_id:
@@ -226,6 +283,90 @@ def update_lead(
         elif old_status == "Dead/Not Interested" and status != "Dead/Not Interested":
             # Reset do_not_contact if moving away from Dead status
             lead.do_not_contact = False
+        
+        # Record timestamp when status is set to 'Joined'
+        if status == "Joined":
+            # Store joined timestamp in extra_data
+            if not lead.extra_data:
+                lead.extra_data = {}
+            if 'joined_at' not in lead.extra_data:
+                joined_timestamp = datetime.utcnow().isoformat()
+                lead.extra_data['joined_at'] = joined_timestamp
+                if user_id:
+                    log_field_update(
+                        db, lead_id, user_id,
+                        'joined_at',
+                        None,
+                        joined_timestamp
+                    )
+        
+        # Auto-clear trial_batch_id when status changes to 'New' or 'Called'
+        if status in ["New", "Called"] and lead.trial_batch_id:
+            old_trial_batch = lead.trial_batch_id
+            lead.trial_batch_id = None
+            if user_id:
+                log_field_update(
+                    db, lead_id, user_id,
+                    'trial_batch_id',
+                    str(old_trial_batch),
+                    None
+                )
+        
+        # SOFT DEACTIVATION: Handle moving from 'Joined' to off-ramp statuses (On Break/Nurture/Dead)
+        # Do NOT delete student records - preserve history for children who take a break
+        if old_status == "Joined" and status in ["On Break", "Nurture", "Dead/Not Interested"]:
+            # Find associated student record and soft deactivate
+            student = db.exec(
+                select(Student).where(Student.lead_id == lead_id)
+            ).first()
+            
+            if student:
+                # Soft deactivation: Set is_active = False to preserve history
+                student.is_active = False
+                db.add(student)
+                db.flush()
+                
+                # Log the soft deactivation
+                if user_id:
+                    log_lead_activity(
+                        db=db,
+                        lead_id=lead_id,
+                        user_id=user_id,
+                        action_type='student_deactivated',
+                        description=f'Student record deactivated (preserved for re-activation). Status changed from Joined to {status}.',
+                        old_value='Active',
+                        new_value='Inactive'
+                    )
+        
+        # RE-ACTIVATION: Handle moving from 'On Break' back to 'Joined'
+        # Re-activate the existing student record to preserve history
+        if old_status == "On Break" and status == "Joined":
+            # Find associated student record and re-activate
+            student = db.exec(
+                select(Student).where(Student.lead_id == lead_id)
+            ).first()
+            
+            if student:
+                # Re-activation: Set is_active = True
+                student.is_active = True
+                db.add(student)
+                db.flush()
+                
+                # Log the re-activation
+                if user_id:
+                    log_lead_activity(
+                        db=db,
+                        lead_id=lead_id,
+                        user_id=user_id,
+                        action_type='student_reactivated',
+                        description=f'Student record re-activated. Status changed from On Break to Joined.',
+                        old_value='Inactive',
+                        new_value='Active'
+                    )
+        
+        # HARD DELETION: Only occurs during status reversal (handled in approvals.py)
+        # This code path is no longer used for regular status updates
+        
         if user_id:
             log_status_change(db, lead_id, user_id, old_status, status)
     
@@ -305,23 +446,51 @@ def update_lead(
                 )
             lead.permanent_batch_id = None
     
+    # Update student_batch_ids (multi-batch assignment for joined students)
+    if student_batch_ids is not None:
+        # Clear existing student batch links
+        existing_links = db.exec(
+            select(StudentBatchLink).where(StudentBatchLink.lead_id == lead_id)
+        ).all()
+        for link in existing_links:
+            db.delete(link)
+        db.commit()  # Commit deletion before adding new ones
+        
+        # Add new student batch links
+        for batch_id in student_batch_ids:
+            # Verify batch exists
+            batch = db.get(Batch, batch_id)
+            if not batch:
+                raise ValueError(f"Batch {batch_id} not found")
+            # Check capacity
+            from backend.core.batches import check_batch_capacity_for_date
+            from datetime import date as date_type
+            is_full, current_count, max_capacity = check_batch_capacity_for_date(
+                db, batch_id, date_type.today()
+            )
+            if is_full:
+                raise ValueError(f"CAPACITY_REACHED: Batch {batch.name} is full.")
+            
+            link = StudentBatchLink(lead_id=lead_id, batch_id=batch_id)
+            db.add(link)
+        
+        # Log the change if user_id is provided
+        if user_id:
+            old_batch_ids = [str(link.batch_id) for link in existing_links]
+            new_batch_ids = [str(bid) for bid in student_batch_ids]
+            log_field_update(
+                db, lead_id, user_id,
+                'student_batch_ids',
+                ','.join(old_batch_ids) if old_batch_ids else None,
+                ','.join(new_batch_ids) if new_batch_ids else None
+            )
+    
     # Update last_updated timestamp
     lead.last_updated = datetime.utcnow()
     
-    # Handle Nurture status: if status is Nurture and no new date provided, clear follow-up date
-    if status == "Nurture" and not next_date:
-        if lead.next_followup_date:
-            old_date_str = lead.next_followup_date.isoformat()
-            lead.next_followup_date = None
-            if user_id:
-                log_field_update(
-                    db, lead_id, user_id,
-                    'next_followup_date',
-                    old_date_str,
-                    None
-                )
     # Update next follow-up date
-    elif next_date and next_date != "None":
+    # Note: Nurture and Dead/Not Interested statuses already had their next_followup_date cleared above
+    if next_date and next_date != "None":
         try:
             new_next_date_obj = datetime.fromisoformat(next_date)
             new_next_date_str = new_next_date_obj.isoformat()
@@ -349,6 +518,30 @@ def update_lead(
                 None
             )
     
+    # Update payment_proof_url if provided
+    if payment_proof_url is not None:
+        old_payment_proof = lead.payment_proof_url
+        lead.payment_proof_url = payment_proof_url
+        if old_payment_proof != payment_proof_url and user_id:
+            log_field_update(
+                db, lead_id, user_id,
+                'payment_proof_url',
+                old_payment_proof,
+                payment_proof_url
+            )
+    
+    # Update call_confirmation_note if provided
+    if call_confirmation_note is not None:
+        old_note = lead.call_confirmation_note
+        lead.call_confirmation_note = call_confirmation_note
+        if old_note != call_confirmation_note and user_id:
+            log_field_update(
+                db, lead_id, user_id,
+                'call_confirmation_note',
+                old_note,
+                call_confirmation_note
+            )
+    
     # Add comment with mentions
     if comment and user_id:
         from backend.core.mentions import parse_mentions, resolve_mentions_to_user_ids, store_mentions
@@ -370,10 +563,6 @@ def update_lead(
     db.add(lead)
     db.commit()
     db.refresh(lead)
-    
-    # Recalculate score after update
-    from backend.core.lead_scoring import update_lead_score
-    update_lead_score(db, lead)
     
     return lead
 
@@ -452,10 +641,6 @@ def create_lead_from_meta(
     db.commit()
     db.refresh(new_lead)
     
-    # Calculate and set initial score
-    from backend.core.lead_scoring import update_lead_score
-    update_lead_score(db, new_lead)
-    
     return new_lead
 
 
@@ -533,10 +718,115 @@ def import_leads_from_dataframe(db: Session, df: pd.DataFrame, meta_col: str) ->
         count += 1
     
     db.commit()
-    # After committing, refresh all newly added leads to calculate scores
-    from backend.core.lead_scoring import update_lead_score
-    for lead in db.exec(select(Lead).where(Lead.score == 0)).all():
-        update_lead_score(db, lead)
-    db.commit() # Commit score updates
     
     return count, errors
+
+
+def check_nudge_expiry(db: Session) -> List[int]:
+    """
+    Check for Nurture leads that have reached the 3-strike limit (nudge_count >= 3).
+    Automatically change their status to 'Dead/Not Interested' and set loss_reason.
+    
+    Args:
+        db: Database session
+        
+    Returns:
+        List of lead IDs that were processed
+    """
+    from backend.models import AuditLog
+    from datetime import datetime
+    
+    # Find all leads in 'Nurture' status with nudge_count >= 3
+    expired_nurture_leads = db.exec(
+        select(Lead).where(
+            Lead.status == "Nurture",
+            Lead.nudge_count >= 3
+        )
+    ).all()
+    
+    processed_lead_ids = []
+    
+    for lead in expired_nurture_leads:
+        old_status = lead.status
+        lead.status = "Dead/Not Interested"
+        lead.loss_reason = "No response to re-engagement"
+        lead.do_not_contact = True
+        lead.next_followup_date = None
+        lead.last_updated = datetime.utcnow()
+        
+        # Add Audit Log entry
+        audit_log = AuditLog(
+            lead_id=lead.id,
+            user_id=None,  # System-generated
+            action_type='status_change',
+            description=f'System: Lead reached 3-strike limit (nudge_count: {lead.nudge_count}). Auto-marked as Dead/Not Interested.',
+            old_value=old_status,
+            new_value="Dead/Not Interested",
+            timestamp=datetime.utcnow()
+        )
+        db.add(audit_log)
+        db.add(lead)
+        processed_lead_ids.append(lead.id)
+    
+    if processed_lead_ids:
+        db.commit()
+    
+    return processed_lead_ids
+
+
+def increment_nudge_count(
+    db: Session,
+    lead_id: int,
+    user_id: Optional[int] = None
+) -> Lead:
+    """
+    Increment the nudge_count for a Nurture lead.
+    Used when sending re-engagement nudges.
+    
+    Args:
+        db: Database session
+        lead_id: Lead ID
+        user_id: User ID who sent the nudge (for audit logging)
+        
+    Returns:
+        Updated Lead object
+        
+    Raises:
+        ValueError: If lead not found or not in Nurture status
+    """
+    from datetime import datetime
+    from backend.core.audit import log_lead_activity
+    
+    lead = db.get(Lead, lead_id)
+    if not lead:
+        raise ValueError(f"Lead {lead_id} not found")
+    
+    if lead.status not in ["Nurture", "On Break"]:
+        raise ValueError("Can only send nudges to leads in 'Nurture' or 'On Break' status")
+    
+    # Increment nudge count
+    old_nudge_count = lead.nudge_count
+    lead.nudge_count = old_nudge_count + 1
+    lead.last_updated = datetime.utcnow()
+    
+    # Log the action
+    log_lead_activity(
+        db,
+        lead_id=lead_id,
+        user_id=user_id,
+        action_type='nudge_sent',
+        description=f'Re-engagement nudge sent (nudge_count: {old_nudge_count} → {lead.nudge_count})',
+        old_value=str(old_nudge_count),
+        new_value=str(lead.nudge_count)
+    )
+    
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+    
+    # Check if this nudge pushed the lead to 3-strike limit
+    if lead.nudge_count >= 3:
+        check_nudge_expiry(db)
+        db.refresh(lead)
+    
+    return lead

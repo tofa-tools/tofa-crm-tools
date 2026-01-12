@@ -78,6 +78,73 @@ def create_user(
     return new_user
 
 
+def update_user(
+    db: Session,
+    user_id: int,
+    full_name: Optional[str] = None,
+    role: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    password: Optional[str] = None,
+    center_ids: Optional[List[int]] = None
+) -> User:
+    """
+    Update an existing user.
+    
+    Args:
+        db: Database session
+        user_id: ID of user to update
+        full_name: New full name (optional)
+        role: New role (optional)
+        is_active: New active status (optional)
+        password: New password (optional, will be hashed if provided)
+        center_ids: New list of center IDs to assign user to (optional)
+        
+    Returns:
+        Updated User object
+        
+    Raises:
+        ValueError: If user not found or validation fails
+    """
+    user = get_user_by_id(db, user_id)
+    if not user:
+        raise ValueError(f"User {user_id} not found")
+    
+    # Update basic fields
+    if full_name is not None:
+        user.full_name = full_name
+    if role is not None:
+        user.role = role
+    if is_active is not None:
+        user.is_active = is_active
+    
+    # Update password if provided
+    if password is not None and password.strip():
+        user.hashed_password = get_password_hash(password)
+    
+    # Handle center re-assignment if provided
+    if center_ids is not None:
+        # Validate: Coaches must be assigned to at least one center
+        if (role or user.role) == "coach" and not center_ids:
+            raise ValueError("Coaches must be assigned to at least one center")
+        
+        # Clear existing center assignments
+        existing_links = db.exec(
+            select(UserCenterLink).where(UserCenterLink.user_id == user_id)
+        ).all()
+        for link in existing_links:
+            db.delete(link)
+        
+        # Add new center assignments
+        for center_id in center_ids:
+            link = UserCenterLink(user_id=user_id, center_id=center_id)
+            db.add(link)
+    
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def verify_user_credentials(db: Session, email: str, password: str) -> Optional[User]:
     """
     Verify user credentials.

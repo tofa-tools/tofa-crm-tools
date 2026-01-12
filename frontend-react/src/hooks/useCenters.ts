@@ -20,4 +20,16 @@ export function useCreateCenter() {
   });
 }
 
+export function useUpdateCenter() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ centerId, centerData }: { centerId: number; centerData: Partial<CenterCreate> }) =>
+      centersAPI.updateCenter(centerId, centerData),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['centers'] });
+    },
+  });
+}
+
 

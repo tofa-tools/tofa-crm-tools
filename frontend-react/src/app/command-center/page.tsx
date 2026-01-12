@@ -1,11 +1,15 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { MetricCards } from '@/components/planner/MetricCards';
 import { CalendarHeatmap } from '@/components/planner/CalendarHeatmap';
 import { ActionQueue } from '@/components/planner/ActionQueue';
 import { ExecutiveDashboard } from '@/components/planner/ExecutiveDashboard';
+import { UnscheduledInbox } from '@/components/planner/UnscheduledInbox';
+import { ExecutiveSidebar } from '@/components/planner/ExecutiveSidebar';
+import Image from 'next/image';
 import { useCalendarMonth } from '@/hooks/useCalendar';
 import { useDailyQueue } from '@/hooks/useTasks';
 import { useUpdateLead } from '@/hooks/useLeads';
@@ -17,14 +21,26 @@ import type { LeadStatus } from '@/types';
 
 export default function CommandCenterPage() {
   const { user } = useAuth();
+  const router = useRouter();
   const queryClient = useQueryClient();
   const isTeamLead = user?.role === 'team_lead';
+
+  // Redirect coaches to their dashboard
+  useEffect(() => {
+    if (user?.role === 'coach') {
+      router.push('/coach/dashboard');
+    }
+  }, [user, router]);
+  
+  if (user?.role === 'coach') {
+    return null;
+  }
   const [currentView, setCurrentView] = useState<'sales' | 'executive'>('sales');
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<string>(
     new Date().toISOString().split('T')[0]
   );
-  const [filterType, setFilterType] = useState<'overdue' | 'unscheduled' | 'skill_reports' | 'hot_trials' | 'reschedule' | 'post_trial_no_response' | null>(null);
+  const [filterType, setFilterType] = useState<'overdue' | 'unscheduled' | 'skill_reports' | 'hot_trials' | 'reschedule' | 'post_trial_no_response' | 'renewals' | 'nurture_reengage' | 'milestones' | 'on_break' | 'returning_soon' | null>(null);
   const [selectedReactivationBatch, setSelectedReactivationBatch] = useState<any>(null);
   const [showBroadcastModal, setShowBroadcastModal] = useState(false);
 
@@ -67,25 +83,41 @@ export default function CommandCenterPage() {
     });
     // Refetch calendar to update heatmap
     refetchCalendar();
-    // Refetch task queue
-    queryClient.invalidateQueries({ queryKey: ['tasks', 'daily-queue', selectedDate] });
-    // Refetch analytics
-    queryClient.invalidateQueries({ queryKey: ['analytics', 'command-center', selectedDate] });
+    // Refetch task queue immediately
+    queryClient.invalidateQueries({ queryKey: ['tasks'] });
+    queryClient.invalidateQueries({ queryKey: ['leads'] });
+    // Refetch analytics immediately
+    queryClient.invalidateQueries({ queryKey: ['analytics'] });
+    // Refetch immediately for instant UI update
+    await queryClient.refetchQueries({ queryKey: ['tasks', 'daily-queue', selectedDate] });
+    await queryClient.refetchQueries({ queryKey: ['analytics', 'command-center', selectedDate] });
   };
 
   const handleMetricClick = (metricType: string) => {
-    if (metricType === 'overdue' || metricType === 'unscheduled' || metricType === 'skill_reports' || metricType === 'hot_trials' || metricType === 'reschedule' || metricType === 'post_trial_no_response') {
-      setFilterType(metricType as 'overdue' | 'unscheduled' | 'skill_reports' | 'hot_trials' | 'reschedule' | 'post_trial_no_response');
+    if (metricType === 'overdue' || metricType === 'unscheduled' || metricType === 'skill_reports' || metricType === 'hot_trials' || metricType === 'reschedule' || metricType === 'post_trial_no_response' || metricType === 'renewals' || metricType === 'nurture_reengage' || metricType === 'milestones' || metricType === 'on_break' || metricType === 'returning_soon') {
+      setFilterType(metricType as 'overdue' | 'unscheduled' | 'skill_reports' | 'hot_trials' | 'reschedule' | 'post_trial_no_response' | 'renewals' | 'nurture_reengage' | 'milestones' | 'on_break' | 'returning_soon');
     }
   };
 
   return (
     <MainLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900">🚀 Command Center</h1>
-          <p className="text-gray-600 mt-2">Your action-oriented hub</p>
+      <div className="space-y-10 pb-8">
+        {/* Header with TOFA Branding */}
+        <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-lg shadow-xl p-6">
+          <div className="flex items-center gap-4">
+            <Image
+              src="/logo.png"
+              alt="TOFA Logo"
+              width={48}
+              height={48}
+              className="object-contain"
+              priority
+            />
+            <div>
+              <h1 className="text-3xl font-black text-white uppercase tracking-tight">Command Center</h1>
+              <p className="text-gray-300 mt-1 font-medium">Your action-oriented hub</p>
+            </div>
+          </div>
         </div>
 
         {/* Tab Switcher (Team Lead only) */}
@@ -160,36 +192,55 @@ export default function CommandCenterPage() {
               </div>
             )}
             
-            {/* Metric Cards Row */}
-            <MetricCards
-              salesMetrics={analyticsData}
-              coachMetrics={analyticsData}
-              onMetricClick={handleMetricClick}
-            />
+            {/* Top Section: Metric Cards Row (Full Width) */}
+            <div className="mt-8">
+              <MetricCards
+                salesMetrics={analyticsData}
+                coachMetrics={analyticsData}
+                onMetricClick={handleMetricClick}
+              />
+            </div>
 
-            {/* Split View: Calendar + Action Queue */}
-            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-              {/* Left Side: Calendar Heatmap (60% = 3/5 cols) */}
+            {/* Main Section: Two-Column Grid (Action Stream + Context Sidebar) */}
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 mt-10">
+              {/* Left Column: Action Stream (75% = 3/4 cols) */}
               <div className="lg:col-span-3">
-                <CalendarHeatmap
-                  year={year}
-                  month={month}
-                  calendarData={calendarData}
-                  selectedDate={selectedDate}
-                  onDateSelect={handleDateSelect}
-                  onMonthChange={handleMonthChange}
-                />
-              </div>
-
-              {/* Right Side: Action Queue (40% = 2/5 cols) */}
-              <div className="lg:col-span-2">
                 <ActionQueue
                   selectedDate={selectedDate}
                   taskQueue={taskQueue}
                   isLoading={isLoadingQueue}
                   onUpdate={handleUpdate}
                   filterType={filterType}
+                  onClearFilter={() => setFilterType(null)}
                 />
+              </div>
+
+              {/* Right Column: Context Sidebar (25% = 1/4 cols) */}
+              <div className="lg:col-span-1 space-y-6">
+                {/* Mini Calendar Navigator Widget */}
+                <div className="bg-white rounded-lg shadow-md p-4">
+                  <CalendarHeatmap
+                    year={year}
+                    month={month}
+                    calendarData={calendarData}
+                    selectedDate={selectedDate}
+                    onDateSelect={handleDateSelect}
+                    onMonthChange={handleMonthChange}
+                    compact={true}
+                  />
+                </div>
+
+                {/* Executive Intelligence Sidebar */}
+                <ExecutiveSidebar />
+
+                {/* Unscheduled Inbox */}
+                <div className="bg-white rounded-lg shadow-md p-4">
+                  <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
+                    <span>📥</span>
+                    <span>Unscheduled Pipeline</span>
+                  </h3>
+                  <UnscheduledInbox filterType={filterType} />
+                </div>
               </div>
             </div>
           </>

@@ -444,7 +444,7 @@ def delete_batch(
 ) -> bool:
     """
     Delete a batch and all its coach assignments.
-    Note: This will NOT delete leads associated with the batch, they will just have null batch references.
+    Clears foreign key references from leads before deletion.
     
     Args:
         db: Database session
@@ -459,6 +459,29 @@ def delete_batch(
     batch = db.get(Batch, batch_id)
     if not batch:
         raise ValueError(f"Batch {batch_id} not found")
+    
+    # Clear preferred_batch_id references
+    leads_with_preferred = db.exec(
+        select(Lead).where(Lead.preferred_batch_id == batch_id)
+    ).all()
+    for lead in leads_with_preferred:
+        lead.preferred_batch_id = None
+        db.add(lead)
+    
+    # Clear trial_batch_id references
+    leads_with_trial = db.exec(
+        select(Lead).where(Lead.trial_batch_id == batch_id)
+    ).all()
+    for lead in leads_with_trial:
+        lead.trial_batch_id = None
+        db.add(lead)
+    
+    # Delete student batch link entries
+    student_batch_links = db.exec(
+        select(StudentBatchLink).where(StudentBatchLink.batch_id == batch_id)
+    ).all()
+    for link in student_batch_links:
+        db.delete(link)
     
     # Delete all coach assignments
     existing_assignments = db.exec(

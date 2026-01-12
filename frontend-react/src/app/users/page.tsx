@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useState, FormEvent, useEffect, useRef } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
-import { useUsers, useCreateUser } from '@/hooks/useUsers';
+import { useUsers, useCreateUser, useUpdateUser } from '@/hooks/useUsers';
 import { useCenters } from '@/hooks/useCenters';
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
+import { Edit } from 'lucide-react';
+import type { User } from '@/types';
 
 export default function UsersPage() {
   const { user } = useAuth();
@@ -14,7 +15,10 @@ export default function UsersPage() {
   const { data: users, isLoading: usersLoading } = useUsers();
   const { data: centers, isLoading: centersLoading } = useCenters();
   const createUserMutation = useCreateUser();
+  const updateUserMutation = useUpdateUser();
+  const formRef = useRef<HTMLDivElement>(null);
 
+  const [editingUser, setEditingUser] = useState<User | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
@@ -25,7 +29,7 @@ export default function UsersPage() {
 
   useEffect(() => {
     if (user && user.role !== 'team_lead') {
-      router.push('/dashboard');
+      router.push('/command-center');
     }
   }, [user, router]);
 
@@ -33,11 +37,43 @@ export default function UsersPage() {
     return null;
   }
 
+  const resetForm = () => {
+    setEditingUser(null);
+    setEmail('');
+    setPassword('');
+    setFullName('');
+    setRole('regular_user');
+    setSelectedCenters([]);
+    setError('');
+  };
+
+  const handleEdit = (user: User) => {
+    setEditingUser(user);
+    setEmail(user.email);
+    setPassword('');
+    setFullName(user.full_name);
+    setRole(user.role);
+    // Note: We need to get user's centers from the backend response
+    // For now, we'll set empty and let the user re-select
+    setSelectedCenters(user.center_ids || []);
+    setShowForm(true);
+    setError('');
+    
+    // Scroll to form
+    setTimeout(() => {
+      formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+  };
+
+  const handleCancel = () => {
+    resetForm();
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
 
-    if (!email || !password || !fullName) {
+    if (!fullName) {
       setError('Please fill all required fields (*)');
       return;
     }
@@ -49,23 +85,44 @@ export default function UsersPage() {
     }
 
     try {
-      await createUserMutation.mutateAsync({
-        email,
-        password,
-        full_name: fullName,
-        role,
-        center_ids: selectedCenters,
-      });
-      // Reset form
-      setEmail('');
-      setPassword('');
-      setFullName('');
-      setRole('regular_user');
-      setSelectedCenters([]);
-      setError('');
-      alert('✅ User created successfully!');
+      if (editingUser) {
+        // Update existing user
+        const updateData: any = {
+          full_name: fullName,
+          role,
+          center_ids: selectedCenters,
+        };
+        
+        // Only include password if provided
+        if (password.trim()) {
+          updateData.password = password;
+        }
+        
+        await updateUserMutation.mutateAsync({
+          userId: editingUser.id,
+          userData: updateData,
+        });
+        resetForm();
+        alert('✅ User updated successfully!');
+      } else {
+        // Create new user
+        if (!email || !password) {
+          setError('Please fill all required fields (*)');
+          return;
+        }
+        
+        await createUserMutation.mutateAsync({
+          email,
+          password,
+          full_name: fullName,
+          role,
+          center_ids: selectedCenters,
+        });
+        resetForm();
+        alert('✅ User created successfully!');
+      }
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to create user');
+      setError(err.response?.data?.detail || `Failed to ${editingUser ? 'update' : 'create'} user`);
     }
   };
 
@@ -90,11 +147,11 @@ export default function UsersPage() {
           <p className="text-gray-600 mt-2">Create and manage user accounts</p>
         </div>
 
-        {/* Create User Form */}
-        <div className="bg-white rounded-lg shadow-md p-6">
+        {/* Create/Edit User Form */}
+        <div ref={formRef} className="bg-white rounded-lg shadow-md p-6">
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-semibold text-gray-900">
-              ➕ Create New User
+              {editingUser ? `✏️ Edit User: ${editingUser.full_name}` : '➕ Create New User'}
             </h2>
             <button
               onClick={() => setShowForm(!showForm)}
@@ -115,14 +172,15 @@ export default function UsersPage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    📧 Email *
+                    📧 Email {editingUser ? '' : '*'}
                   </label>
                   <input
                     type="email"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    required
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                    required={!editingUser}
+                    disabled={!!editingUser}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none disabled:bg-gray-100 disabled:cursor-not-allowed"
                   />
                 </div>
                 <div>
@@ -139,13 +197,13 @@ export default function UsersPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    🔒 Password *
+                    🔒 Password {editingUser ? '(leave blank to keep current)' : '*'}
                   </label>
                   <input
                     type="password"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    required
+                    required={!editingUser}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
                   />
                 </div>
@@ -199,15 +257,26 @@ export default function UsersPage() {
                 </div>
               </div>
 
-              <button
-                type="submit"
-                disabled={createUserMutation.isPending}
-                className="w-full bg-gradient-primary text-white font-semibold py-3 px-4 rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
-              >
-                {createUserMutation.isPending
-                  ? 'Creating...'
-                  : '✨ Create User'}
-              </button>
+              <div className="flex gap-3">
+                {editingUser && (
+                  <button
+                    type="button"
+                    onClick={handleCancel}
+                    className="flex-1 bg-gray-200 text-gray-800 font-semibold py-3 px-4 rounded-lg hover:bg-gray-300 transition-colors"
+                  >
+                    Cancel Edit
+                  </button>
+                )}
+                <button
+                  type="submit"
+                  disabled={createUserMutation.isPending || updateUserMutation.isPending}
+                  className={`${editingUser ? 'flex-1' : 'w-full'} bg-gradient-primary text-white font-semibold py-3 px-4 rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-md`}
+                >
+                  {createUserMutation.isPending || updateUserMutation.isPending
+                    ? (editingUser ? 'Updating...' : 'Creating...')
+                    : (editingUser ? '✨ Update User' : '✨ Create User')}
+                </button>
+              </div>
             </form>
           )}
         </div>
@@ -234,6 +303,9 @@ export default function UsersPage() {
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Role
                     </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
@@ -250,6 +322,15 @@ export default function UsersPage() {
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 capitalize">
                         {user.role.replace('_', ' ')}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        <button
+                          onClick={() => handleEdit(user)}
+                          className="flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium"
+                        >
+                          <Edit className="h-4 w-4" />
+                          Edit
+                        </button>
                       </td>
                     </tr>
                   ))}

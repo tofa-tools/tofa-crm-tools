@@ -19,6 +19,7 @@ export function useLeads(params?: UseLeadsParams) {
     queryKey: ['leads', params],
     queryFn: () => leadsAPI.getMyLeads(params),
     placeholderData: (previousData) => previousData,
+    refetchInterval: 30000, // Refetch every 30 seconds for real-time updates
   });
 }
 /**

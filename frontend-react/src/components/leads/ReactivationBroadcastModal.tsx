@@ -1,9 +1,11 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X } from 'lucide-react';
+import { X, Phone, ArrowRight, CheckCircle2 } from 'lucide-react';
 import axios from 'axios';
 import type { Lead } from '@/types';
+import { leadsAPI } from '@/lib/api';
+import toast from 'react-hot-toast';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 
@@ -32,9 +34,11 @@ export function ReactivationBroadcastModal({
   batchTime,
   batchPublicLink,
 }: ReactivationBroadcastModalProps) {
-  const [selectedLeads, setSelectedLeads] = useState<Set<number>>(new Set());
   const [reactivationLeads, setReactivationLeads] = useState<Lead[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [sentLeads, setSentLeads] = useState<Set<number>>(new Set());
+  const [isSending, setIsSending] = useState(false);
 
   useEffect(() => {
     if (isOpen && batchId) {
@@ -44,155 +48,259 @@ export function ReactivationBroadcastModal({
         headers: { Authorization: `Bearer ${token}` }
       })
         .then(response => {
-          setReactivationLeads(response.data.leads || []);
-          setSelectedLeads(new Set(response.data.leads?.map((l: Lead) => l.id) || []));
+          const leads = response.data.leads || [];
+          setReactivationLeads(leads);
+          setCurrentIndex(0);
+          setSentLeads(new Set());
         })
         .catch(error => {
           console.error('Error fetching reactivation leads:', error);
           setReactivationLeads([]);
+          toast.error('Failed to load reactivation leads');
         })
         .finally(() => setIsLoading(false));
     }
   }, [isOpen, batchId]);
 
+  // Reset state when modal closes
+  useEffect(() => {
+    if (!isOpen) {
+      setCurrentIndex(0);
+      setSentLeads(new Set());
+      setReactivationLeads([]);
+    }
+  }, [isOpen]);
+
   const displayLeads = (providedLeads && providedLeads.length > 0) ? providedLeads : reactivationLeads;
+  const currentLead = displayLeads[currentIndex] || null;
+  const remainingCount = displayLeads.length - (currentIndex + 1);
 
   if (!isOpen) return null;
 
   const generateWhatsAppMessage = (lead: Lead) => {
     const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
-    const publicLink = batchPublicLink || `${baseUrl}/batches`;
+    const prefUrl = lead.public_token ? `${baseUrl}/pref/${lead.public_token}` : (batchPublicLink || `${baseUrl}/batches`);
+    const parentName = lead.player_name.split(' ')[0];
     
-    const message = `Hi ${lead.player_name.split(' ')[0]}, great news! We just launched a NEW ${ageCategory} batch at TOFA ${centerName} on ${batchSchedule} at ${batchTime}. Since you were interested before, we wanted to give you priority! View the schedule here: ${publicLink}`;
+    const message = `Hi ${parentName}, great news! We just launched a NEW ${ageCategory} batch at TOFA ${centerName} on ${batchSchedule} at ${batchTime}. Since you were interested before, we wanted to give you priority! 
+
+Choose your preferred slot here: ${prefUrl}`;
     
     return message;
   };
 
-  const handleSelectAll = () => {
-    if (selectedLeads.size === displayLeads.length) {
-      setSelectedLeads(new Set());
-    } else {
-      setSelectedLeads(new Set(displayLeads.map(l => l.id)));
-    }
-  };
-
-  const handleToggleLead = (leadId: number) => {
-    const newSelected = new Set(selectedLeads);
-    if (newSelected.has(leadId)) {
-      newSelected.delete(leadId);
-    } else {
-      newSelected.add(leadId);
-    }
-    setSelectedLeads(newSelected);
-  };
-
-  const handleSendMessage = (lead: Lead) => {
-    const cleanPhone = lead.phone?.replace(/\D/g, '');
+  const handleSendNudge = async () => {
+    if (!currentLead) return;
+    
+    const cleanPhone = currentLead.phone?.replace(/\D/g, '');
     if (!cleanPhone) {
-      alert('No phone number available for this lead');
+      toast.error('No phone number available for this lead');
       return;
     }
     
-    const message = generateWhatsAppMessage(lead);
-    const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
-    window.open(whatsappUrl, '_blank');
+    setIsSending(true);
+    
+    try {
+      // Increment nudge_count via API
+      await leadsAPI.sendNudge(currentLead.id);
+      
+      // Generate WhatsApp message with preference link
+      const message = generateWhatsAppMessage(currentLead);
+      const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
+      
+      // Open WhatsApp
+      window.open(whatsappUrl, '_blank');
+      
+      // Mark as sent and move to next
+      setSentLeads(prev => new Set(prev).add(currentLead.id));
+      
+      // Auto-advance to next lead after a short delay
+      setTimeout(() => {
+        if (currentIndex < displayLeads.length - 1) {
+          setCurrentIndex(prev => prev + 1);
+        } else {
+          // All leads processed
+          toast.success(`✅ All ${displayLeads.length} nudges sent!`);
+        }
+        setIsSending(false);
+      }, 500);
+      
+      toast.success(`Nudge sent to ${currentLead.player_name.split(' ')[0]}'s parent`);
+    } catch (error: any) {
+      console.error('Error sending nudge:', error);
+      toast.error(error.message || 'Failed to send nudge');
+      setIsSending(false);
+    }
   };
+
+  const handleSkip = () => {
+    if (currentIndex < displayLeads.length - 1) {
+      setCurrentIndex(prev => prev + 1);
+    } else {
+      // Last lead was skipped - show completion
+      setCurrentIndex(displayLeads.length);
+    }
+  };
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto">
       <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
         <div className="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75" onClick={onClose}></div>
 
-        <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-4xl sm:w-full">
+        <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full">
           <div className="bg-white px-4 pt-5 pb-4 sm:p-6">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900">
-                ✨ Bulk WhatsApp Broadcast
+              <h3 className="text-xl font-bold text-gray-900">
+                📱 Re-activation Broadcast
               </h3>
               <button
                 onClick={onClose}
-                className="text-gray-400 hover:text-gray-500"
+                className="text-gray-400 hover:text-gray-500 transition-colors"
               >
                 <X className="h-6 w-6" />
               </button>
             </div>
 
-            <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-              <p className="text-sm font-semibold text-blue-900 mb-2">Batch Details:</p>
-              <p className="text-sm text-blue-800">
-                <strong>{batchName}</strong> ({ageCategory}) at {centerName}
+            {/* Batch Info */}
+            <div className="mb-6 p-4 bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 rounded-lg">
+              <p className="text-sm font-semibold text-indigo-900 mb-2">✨ New Batch Details:</p>
+              <p className="text-base font-bold text-indigo-800">
+                {batchName} ({ageCategory})
               </p>
-              <p className="text-sm text-blue-800">
-                Schedule: {batchSchedule} at {batchTime}
-              </p>
-              <p className="text-sm text-blue-700 mt-2">
-                {selectedLeads.size} of {displayLeads.length} leads selected
+              <p className="text-sm text-indigo-700 mt-1">
+                📍 {centerName} • 🗓️ {batchSchedule} at {batchTime}
               </p>
             </div>
 
-            <div className="mb-4">
-              <button
-                onClick={handleSelectAll}
-                className="px-4 py-2 text-sm font-medium text-indigo-600 hover:text-indigo-800"
-              >
-                {selectedLeads.size === leads.length ? 'Deselect All' : 'Select All'}
-              </button>
-            </div>
+            {/* Queue Interface */}
+            {isLoading ? (
+              <div className="text-center py-12">
+                <p className="text-gray-500 text-lg">Loading potential reactivations...</p>
+              </div>
+            ) : displayLeads.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-gray-500 text-lg">No leads found to re-activate</p>
+                <p className="text-sm text-gray-400 mt-2">
+                  Leads must be in 'Nurture', 'On Break', or 'Dead' (with 'Timing Mismatch' reason)
+                </p>
+              </div>
+            ) : !currentLead ? (
+              <div className="text-center py-12">
+                <CheckCircle2 className="h-16 w-16 text-green-500 mx-auto mb-4" />
+                <p className="text-xl font-semibold text-gray-900 mb-2">
+                  ✅ All Done!
+                </p>
+                <p className="text-gray-600">
+                  Successfully sent {displayLeads.length} re-activation nudges
+                </p>
+                <button
+                  onClick={onClose}
+                  className="mt-6 px-6 py-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {/* Progress Indicator */}
+                <div className="flex items-center justify-between text-sm text-gray-600 mb-4">
+                  <span className="font-medium">
+                    Lead {currentIndex + 1} of {displayLeads.length}
+                  </span>
+                  {remainingCount > 0 && (
+                    <span className="text-gray-500">
+                      {remainingCount} remaining
+                    </span>
+                  )}
+                </div>
 
-            <div className="max-h-96 overflow-y-auto space-y-2 border rounded-lg p-4">
-              {isLoading ? (
-                <p className="text-center text-gray-500 py-8">Loading potential reactivations...</p>
-              ) : displayLeads.length === 0 ? (
-                <p className="text-center text-gray-500 py-8">No leads to display</p>
-              ) : (
-                displayLeads.map((lead) => (
-                  <div
-                    key={lead.id}
-                    className={`p-3 border rounded-lg ${
-                      selectedLeads.has(lead.id)
-                        ? 'bg-blue-50 border-blue-300'
-                        : 'bg-gray-50 border-gray-200'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-start gap-3 flex-1">
-                        <input
-                          type="checkbox"
-                          checked={selectedLeads.has(lead.id)}
-                          onChange={() => handleToggleLead(lead.id)}
-                          className="mt-1 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                        />
-                        <div className="flex-1">
-                          <p className="font-semibold text-gray-900">{lead.player_name}</p>
-                          <p className="text-sm text-gray-600">{lead.phone || 'No phone'}</p>
-                          {lead.loss_reason && (
-                            <p className="text-xs text-gray-500 mt-1">
-                              Previous reason: {lead.loss_reason}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => handleSendMessage(lead)}
-                        disabled={!selectedLeads.has(lead.id) || !lead.phone}
-                        className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${
-                          selectedLeads.has(lead.id) && lead.phone
-                            ? 'bg-green-600 hover:bg-green-700 text-white'
-                            : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                        }`}
-                      >
-                        📱 Send
-                      </button>
+                {/* Current Lead Card */}
+                <div className="bg-gradient-to-br from-white to-gray-50 border-2 border-gray-200 rounded-xl p-6 shadow-lg">
+                  <div className="mb-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-lg font-bold text-gray-900">
+                        {currentLead.player_name}
+                      </h4>
+                      <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                        currentLead.status === 'Nurture' 
+                          ? 'bg-yellow-100 text-yellow-800'
+                          : currentLead.status === 'On Break'
+                          ? 'bg-cyan-100 text-cyan-800'
+                          : 'bg-gray-100 text-gray-800'
+                      }`}>
+                        {currentLead.status}
+                      </span>
                     </div>
-                    {selectedLeads.has(lead.id) && (
-                      <div className="mt-2 p-2 bg-white border border-gray-200 rounded text-xs text-gray-600">
-                        <strong>Preview:</strong> {generateWhatsAppMessage(lead).substring(0, 150)}...
-                      </div>
+                    <p className="text-sm text-gray-600">
+                      Parent: {currentLead.phone || 'No phone number'}
+                    </p>
+                    {currentLead.loss_reason && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        Previous reason: {currentLead.loss_reason}
+                      </p>
+                    )}
+                    {currentLead.nudge_count && currentLead.nudge_count > 0 && (
+                      <p className="text-xs text-orange-600 mt-1 font-medium">
+                        ⚠️ Nudge {currentLead.nudge_count} of 3
+                      </p>
                     )}
                   </div>
-                ))
-              )}
-            </div>
+
+                  {/* Message Preview */}
+                  <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                    <p className="text-xs font-semibold text-blue-900 mb-2">Message Preview:</p>
+                    <p className="text-sm text-blue-800 whitespace-pre-wrap">
+                      {generateWhatsAppMessage(currentLead)}
+                    </p>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex gap-3">
+                    <button
+                      onClick={handleSkip}
+                      disabled={isSending}
+                      className="flex-1 px-4 py-3 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                    >
+                      <ArrowRight className="h-4 w-4" />
+                      Skip
+                    </button>
+                    <button
+                      onClick={handleSendNudge}
+                      disabled={isSending || !currentLead.phone || sentLeads.has(currentLead.id)}
+                      className="flex-1 px-6 py-4 bg-green-600 text-white font-bold rounded-lg hover:bg-green-700 active:bg-green-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-lg shadow-lg"
+                    >
+                      {isSending ? (
+                        <>
+                          <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                          Sending...
+                        </>
+                      ) : sentLeads.has(currentLead.id) ? (
+                        <>
+                          <CheckCircle2 className="h-5 w-5" />
+                          Sent ✓
+                        </>
+                      ) : (
+                        <>
+                          <Phone className="h-5 w-5" />
+                          📱 Send Nudge to {currentLead.player_name.split(' ')[0]}'s Parent
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Remaining Leads Preview */}
+                {remainingCount > 0 && (
+                  <div className="pt-4 border-t border-gray-200">
+                    <p className="text-xs text-gray-500 text-center">
+                      Next: {displayLeads[currentIndex + 1]?.player_name || 'None'}
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -5,7 +5,7 @@ All routes delegate to framework-agnostic core functions.
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, status, Body
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import Session
+from sqlmodel import Session, select
 from typing import List, Optional, Dict
 import pandas as pd
 from datetime import datetime
@@ -38,15 +38,15 @@ except ImportError:
 
 from backend.core.db import get_session, create_db_and_tables, engine
 from backend.core.auth import create_access_token, get_user_email_from_token
-from backend.core.users import verify_user_credentials, create_user, get_all_users, get_user_by_email
+from backend.core.users import verify_user_credentials, create_user, get_all_users, get_user_by_email, update_user
 from backend.core.leads import (
-    get_leads_for_user, update_lead, create_lead_from_meta, import_leads_from_dataframe
+    get_leads_for_user, update_lead, create_lead_from_meta, import_leads_from_dataframe, increment_nudge_count
 )
 from backend.core.audit import get_audit_logs_for_lead
 from backend.core.bulk_operations import (
     bulk_update_lead_status, bulk_update_lead_assignment, verify_leads_accessible
 )
-from backend.core.centers import get_all_centers, create_center
+from backend.core.centers import get_all_centers, create_center, update_center
 from backend.core.import_validation import preview_import_data, auto_detect_column_mapping
 from backend.core.analytics import (
     calculate_conversion_rates, 
@@ -65,6 +65,7 @@ from backend.core.batches import (
     update_batch
 )
 from backend.core.public_preferences import (
+    record_lead_feedback_by_token,
     get_lead_preferences_by_token, update_lead_preferences_by_token
 )
 from backend.core.skills import (
@@ -75,9 +76,14 @@ from backend.core.staging import (
 )
 from backend.core.reactivations import get_potential_reactivations
 from backend.core.attendance import record_attendance, get_attendance_history
+from backend.core.approvals import (
+    create_request, get_pending_requests, get_request_by_id,
+    resolve_request, get_requests_for_lead
+)
+from backend.core.students import get_all_students, get_student_by_lead_id
 from backend.schemas.leads import LeadPreferencesRead, LeadPreferencesUpdate
-from backend.models import User, Center, Lead
-from backend.schemas.users import UserCreateSchema
+from backend.models import User, Center, Lead, Student
+from backend.schemas.users import UserCreateSchema, UserUpdateSchema
 from backend.schemas.bulk import BulkUpdateStatusRequest, BulkAssignCenterRequest
 
 # FastAPI OAuth2 scheme for token extraction
@@ -168,7 +174,24 @@ def get_users(
         raise HTTPException(status_code=403, detail="Only team leads can view all users")
     
     users = get_all_users(db)
-    return users
+    # Include center_ids in response
+    from backend.models import UserCenterLink
+    result = []
+    for user in users:
+        user_dict = {
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "role": user.role,
+            "is_active": user.is_active,
+        }
+        # Get center IDs for this user
+        center_links = db.exec(
+            select(UserCenterLink).where(UserCenterLink.user_id == user.id)
+        ).all()
+        user_dict["center_ids"] = [link.center_id for link in center_links]
+        result.append(user_dict)
+    return result
 
 
 @app.post("/users")
@@ -191,6 +214,38 @@ def create_user_endpoint(
             center_ids=user_data.center_ids
         )
         return {"id": new_user.id, "email": new_user.email, "full_name": new_user.full_name, "role": new_user.role}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/users/{user_id}")
+def update_user_endpoint(
+    user_id: int,
+    user_data: UserUpdateSchema,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Update an existing user (team leads only)."""
+    if current_user.role != "team_lead":
+        raise HTTPException(status_code=403, detail="Only team leads can update users")
+    
+    try:
+        updated_user = update_user(
+            db=db,
+            user_id=user_id,
+            full_name=user_data.full_name,
+            role=user_data.role,
+            is_active=user_data.is_active,
+            password=user_data.password,
+            center_ids=user_data.center_ids
+        )
+        return {
+            "id": updated_user.id,
+            "email": updated_user.email,
+            "full_name": updated_user.full_name,
+            "role": updated_user.role,
+            "is_active": updated_user.is_active
+        }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -222,6 +277,34 @@ def create_center_endpoint(
     try:
         new_center = create_center(db, display_name, meta_tag_name, city, location)
         return new_center
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/centers/{center_id}")
+def update_center_endpoint(
+    center_id: int,
+    display_name: Optional[str] = None,
+    meta_tag_name: Optional[str] = None,
+    city: Optional[str] = None,
+    location: Optional[str] = None,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Update an existing center (team leads only)."""
+    if current_user.role != "team_lead":
+        raise HTTPException(status_code=403, detail="Only team leads can update centers")
+    
+    try:
+        updated_center = update_center(
+            db=db,
+            center_id=center_id,
+            display_name=display_name,
+            meta_tag_name=meta_tag_name,
+            city=city,
+            location=location
+        )
+        return updated_center
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -468,6 +551,8 @@ def update_lead_endpoint(
     subscription_plan: Optional[str] = None,
     subscription_start_date: Optional[str] = None,
     subscription_end_date: Optional[str] = None,
+    payment_proof_url: Optional[str] = None,  # URL to payment proof image
+    call_confirmation_note: Optional[str] = None,  # Note confirming call with parent
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
@@ -507,7 +592,9 @@ def update_lead_endpoint(
             player_age_category=age_category,  # Map age_category parameter to player_age_category
             trial_batch_id=trial_batch_id,
             permanent_batch_id=permanent_batch_id,
-            student_batch_ids=student_batch_ids_list
+            student_batch_ids=student_batch_ids_list,
+            payment_proof_url=payment_proof_url,
+            call_confirmation_note=call_confirmation_note
         )
         
         # Update subscription fields if provided
@@ -520,10 +607,40 @@ def update_lead_endpoint(
                 lead.subscription_plan = subscription_plan
             if subscription_start_date_obj is not None:
                 lead.subscription_start_date = subscription_start_date_obj
+                # Auto-calculate end date if plan is provided but end date is not
+                if subscription_plan and not subscription_end_date_obj:
+                    from datetime import timedelta
+                    if subscription_plan == "Monthly":
+                        lead.subscription_end_date = subscription_start_date_obj + timedelta(days=30)
+                    elif subscription_plan == "Quarterly":
+                        lead.subscription_end_date = subscription_start_date_obj + timedelta(days=90)
+                    elif subscription_plan == "6 Months":
+                        lead.subscription_end_date = subscription_start_date_obj + timedelta(days=180)
+                    elif subscription_plan == "Yearly":
+                        lead.subscription_end_date = subscription_start_date_obj + timedelta(days=365)
+            elif subscription_plan and lead.subscription_start_date and not subscription_end_date_obj and not lead.subscription_end_date:
+                # Calculate end date from existing start date if plan is provided but no dates are
+                from datetime import timedelta
+                if subscription_plan == "Monthly":
+                    lead.subscription_end_date = lead.subscription_start_date + timedelta(days=30)
+                elif subscription_plan == "Quarterly":
+                    lead.subscription_end_date = lead.subscription_start_date + timedelta(days=90)
+                elif subscription_plan == "6 Months":
+                    lead.subscription_end_date = lead.subscription_start_date + timedelta(days=180)
+                elif subscription_plan == "Yearly":
+                    lead.subscription_end_date = lead.subscription_start_date + timedelta(days=365)
             if subscription_end_date_obj is not None:
                 lead.subscription_end_date = subscription_end_date_obj
             db.add(lead)
             db.commit()
+            db.refresh(lead)
+        
+        # Return updated lead data
+        from backend.core.leads import get_lead_by_id
+        updated_lead = get_lead_by_id(db, lead_id)
+        if updated_lead:
+            from backend.schemas.leads import LeadRead
+            return LeadRead.model_validate(updated_lead)
         
         return {"status": "updated"}
     except ValueError as e:
@@ -532,6 +649,375 @@ def update_lead_endpoint(
         if "CAPACITY_REACHED" in error_message:
             raise HTTPException(status_code=400, detail=error_message)
         raise HTTPException(status_code=400, detail=error_message)
+
+
+@app.post("/leads/{lead_id}/convert")
+def convert_lead_to_student_endpoint(
+    lead_id: int,
+    subscription_plan: str,
+    subscription_start_date: str,
+    subscription_end_date: Optional[str] = None,
+    payment_proof_url: Optional[str] = None,
+    student_batch_ids: Optional[str] = None,  # Comma-separated list of batch IDs
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Convert a Lead to a Student (graduate from prospect to active member).
+    This endpoint should be used by the 'Complete Joining' button in the frontend.
+    """
+    from backend.core.leads import get_lead_by_id
+    from backend.core.students import convert_lead_to_student
+    from datetime import date as date_type
+    
+    # Verify user has access to this lead
+    lead = get_lead_by_id(db, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    
+    # Check permissions
+    if current_user.role != "team_lead":
+        user_center_ids = [c.id for c in current_user.centers]
+        if lead.center_id not in user_center_ids:
+            raise HTTPException(status_code=403, detail="Not authorized to convert this lead")
+    
+    # Parse subscription dates
+    try:
+        subscription_start_date_obj = datetime.fromisoformat(subscription_start_date).date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid subscription_start_date format: {subscription_start_date}. Use YYYY-MM-DD")
+    
+    subscription_end_date_obj = None
+    if subscription_end_date:
+        try:
+            subscription_end_date_obj = datetime.fromisoformat(subscription_end_date).date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid subscription_end_date format: {subscription_end_date}. Use YYYY-MM-DD")
+    
+    # Parse student_batch_ids if provided
+    student_batch_ids_list = []
+    if student_batch_ids:
+        try:
+            student_batch_ids_list = [int(id.strip()) for id in student_batch_ids.split(",") if id.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid student_batch_ids format. Use comma-separated integers")
+    
+    # Prepare student data
+    student_data = {
+        'subscription_plan': subscription_plan,
+        'subscription_start_date': subscription_start_date_obj,
+        'subscription_end_date': subscription_end_date_obj,
+        'payment_proof_url': payment_proof_url,
+        'student_batch_ids': student_batch_ids_list,
+        'center_id': lead.center_id
+    }
+    
+    try:
+        student = convert_lead_to_student(
+            db=db,
+            lead_id=lead_id,
+            student_data=student_data,
+            user_id=current_user.id
+        )
+        
+        # Return student data with lead info
+        from backend.schemas.students import StudentRead
+        from sqlalchemy.orm import selectinload
+        # Reload student with relationships
+        from backend.models import Student
+        stmt = select(Student).where(Student.id == student.id).options(
+            selectinload(Student.lead),
+            selectinload(Student.batches)
+        )
+        student_with_relations = db.exec(stmt).first()
+        return StudentRead.from_student(student_with_relations)
+    except ValueError as e:
+        error_message = str(e)
+        if "CAPACITY_REACHED" in error_message:
+            raise HTTPException(status_code=400, detail=error_message)
+        raise HTTPException(status_code=400, detail=error_message)
+
+
+@app.get("/students")
+def get_students_endpoint(
+    center_id: Optional[int] = None,
+    is_active: Optional[bool] = None,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all students from the Student table, including player name from linked Lead record."""
+    from backend.schemas.students import StudentRead
+    from sqlalchemy.orm import selectinload
+    
+    # Get students with lead relationship loaded
+    students = get_all_students(db, center_id=center_id, is_active=is_active)
+    
+    # Eagerly load lead relationships
+    from backend.models import Student
+    from sqlmodel import select
+    if students:
+        student_ids = [s.id for s in students]
+        stmt = select(Student).where(Student.id.in_(student_ids)).options(
+            selectinload(Student.lead),
+            selectinload(Student.batches)
+        )
+        students = list(db.exec(stmt).all())
+    
+    # Convert to response format
+    result = []
+    for student in students:
+        student_data = StudentRead.from_student(student)
+        # Mask sensitive fields for coaches
+        if current_user.role == "coach":
+            from backend.core.lead_privacy import mask_student_for_coach
+            student_dict = student_data.model_dump()
+            masked_dict = mask_student_for_coach(student_dict)
+            result.append(masked_dict)
+        else:
+            result.append(student_data.model_dump())
+    
+    return result
+
+
+@app.put("/students/{student_id}")
+def update_student_endpoint(
+    student_id: int,
+    center_id: Optional[int] = None,
+    subscription_plan: Optional[str] = None,
+    subscription_start_date: Optional[str] = None,
+    subscription_end_date: Optional[str] = None,
+    payment_proof_url: Optional[str] = None,
+    student_batch_ids: Optional[str] = None,  # Comma-separated list of batch IDs
+    is_active: Optional[bool] = None,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Update a student's subscription, batches, status, or center (with strict governance)."""
+    from backend.core.students import get_student_by_lead_id, update_student
+    from backend.models import Student, StudentBatchLink, Batch
+    from sqlalchemy.orm import selectinload
+    from sqlmodel import select
+    from datetime import date as date_type
+    
+    # Get student
+    student = db.get(Student, student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    # Check permissions (basic access check)
+    if current_user.role != "team_lead":
+        user_center_ids = [c.id for c in current_user.centers]
+        if student.center_id not in user_center_ids:
+            raise HTTPException(status_code=403, detail="Not authorized to update this student")
+    
+    # Parse batch IDs if provided
+    batch_ids_list = None
+    if student_batch_ids is not None:
+        batch_ids_list = []
+        if student_batch_ids:
+            try:
+                batch_ids_list = [int(id.strip()) for id in student_batch_ids.split(",") if id.strip()]
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid student_batch_ids format. Use comma-separated integers")
+    
+    # Parse dates if provided
+    parsed_start_date = None
+    parsed_end_date = None
+    
+    if subscription_start_date:
+        try:
+            parsed_start_date = datetime.fromisoformat(subscription_start_date).date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid subscription_start_date format: {subscription_start_date}")
+    
+    if subscription_end_date:
+        try:
+            parsed_end_date = datetime.fromisoformat(subscription_end_date).date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid subscription_end_date format: {subscription_end_date}")
+    
+    # Track if subscription is being renewed (new dates or plan provided)
+    subscription_renewed = False
+    if subscription_plan is not None and subscription_plan != student.subscription_plan:
+        subscription_renewed = True
+    if parsed_start_date is not None and parsed_start_date != student.subscription_start_date:
+        subscription_renewed = True
+    if parsed_end_date is not None and parsed_end_date != student.subscription_end_date:
+        subscription_renewed = True
+    
+    # Use update_student function with strict governance
+    try:
+        updated_student = update_student(
+            db=db,
+            student_id=student_id,
+            user_id=current_user.id,
+            user_role=current_user.role,
+            center_id=center_id,
+            subscription_plan=subscription_plan,
+            subscription_start_date=parsed_start_date,
+            subscription_end_date=parsed_end_date,
+            payment_proof_url=payment_proof_url,
+            student_batch_ids=batch_ids_list,
+            is_active=is_active
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    # Renewal Reset: Reset renewal flags when subscription is renewed
+    if subscription_renewed:
+        updated_student.renewal_intent = False
+        updated_student.in_grace_period = False
+        updated_student.grace_nudge_count = 0
+        db.add(updated_student)
+        db.commit()
+        db.refresh(updated_student)
+    
+    # Reload with relationships
+    stmt = select(Student).where(Student.id == student_id).options(
+        selectinload(Student.lead),
+        selectinload(Student.batches)
+    )
+    updated_student = db.exec(stmt).first()
+    
+    from backend.schemas.students import StudentRead
+    return StudentRead.from_student(updated_student)
+
+
+@app.put("/students/renew/{public_token}")
+def update_renewal_intent_endpoint(
+    public_token: str,
+    db: Session = Depends(get_session)
+):
+    """
+    Public endpoint to update renewal_intent for a student.
+    Called from the public renewal page.
+    """
+    from backend.models import Student, Lead
+    from sqlalchemy.orm import selectinload
+    from sqlmodel import select
+    
+    # Find student by lead's public_token
+    # First find the lead with this public_token
+    lead = db.exec(
+        select(Lead).where(Lead.public_token == public_token)
+    ).first()
+    
+    if not lead:
+        raise HTTPException(status_code=404, detail="Invalid renewal link")
+    
+    # Find the student associated with this lead
+    student = db.exec(
+        select(Student)
+        .where(Student.lead_id == lead.id)
+        .options(selectinload(Student.lead))
+    ).first()
+    
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found for this link")
+    
+    # Update renewal_intent
+    student.renewal_intent = True
+    db.add(student)
+    db.commit()
+    db.refresh(student)
+    
+    return {
+        "success": True,
+        "message": "Renewal intent recorded. Our team will follow up for payment.",
+        "student_id": student.id,
+        "player_name": lead.player_name if lead else None
+    }
+
+
+@app.post("/students/{student_id}/grace-nudge")
+def send_grace_nudge_endpoint(
+    student_id: int,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Send a grace period nudge to a student.
+    Increments grace_nudge_count.
+    """
+    from backend.models import Student, AuditLog
+    from datetime import datetime
+    
+    student = db.get(Student, student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    # Verify user has access
+    if current_user.role != "team_lead":
+        user_center_ids = [c.id for c in current_user.centers]
+        if student.center_id not in user_center_ids:
+            raise HTTPException(status_code=403, detail="Not authorized to update this student")
+    
+    if not student.in_grace_period:
+        raise HTTPException(status_code=400, detail="Student is not in grace period")
+    
+    if student.grace_nudge_count >= 2:
+        raise HTTPException(status_code=400, detail="Maximum grace nudges (2) already sent")
+    
+    # Increment grace_nudge_count
+    old_count = student.grace_nudge_count
+    student.grace_nudge_count = old_count + 1
+    
+    # Log the action
+    if student.lead:
+        audit_log = AuditLog(
+            lead_id=student.lead_id,
+            user_id=current_user.id,
+            action_type='grace_nudge_sent',
+            description=f'Grace period nudge sent (grace_nudge_count: {old_count} → {student.grace_nudge_count})',
+            old_value=str(old_count),
+            new_value=str(student.grace_nudge_count),
+            timestamp=datetime.utcnow()
+        )
+        db.add(audit_log)
+    
+    db.add(student)
+    db.commit()
+    db.refresh(student)
+    
+    return {
+        "message": "Grace nudge sent successfully",
+        "grace_nudge_count": student.grace_nudge_count
+    }
+
+
+@app.get("/students/by-token/{public_token}")
+def get_student_by_token_endpoint(
+    public_token: str,
+    db: Session = Depends(get_session)
+):
+    """
+    Public endpoint to get student information by public_token.
+    Used by the renewal page to display student info.
+    """
+    from backend.models import Student, Lead
+    from sqlalchemy.orm import selectinload
+    from sqlmodel import select
+    
+    # Find lead by public_token
+    lead = db.exec(
+        select(Lead).where(Lead.public_token == public_token)
+    ).first()
+    
+    if not lead:
+        raise HTTPException(status_code=404, detail="Invalid renewal link")
+    
+    # Find student associated with this lead
+    student = db.exec(
+        select(Student)
+        .where(Student.lead_id == lead.id)
+        .options(selectinload(Student.lead), selectinload(Student.batches))
+    ).first()
+    
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found for this link")
+    
+    from backend.schemas.students import StudentRead
+    return StudentRead.from_student(student)
 
 
 @app.put("/leads/{lead_id}/age-category")
@@ -577,15 +1063,62 @@ def update_lead_metadata_endpoint(
 ):
     """Update a lead's extra_data field (e.g., skill reports)."""
     from backend.core.lead_metadata import update_lead_metadata
-    from backend.core.leads import get_lead_by_id
+    from backend.core.leads import get_lead_by_id, get_leads_for_user
     
     # Verify user has access to this lead
     lead = get_lead_by_id(db, lead_id)
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found")
     
-    # Check permissions
-    if current_user.role != "team_lead":
+    # Check permissions based on user role
+    if current_user.role == "coach":
+        # Coaches can only update skill reports for leads/students in their assigned batches
+        # Check: 1) lead has trial_batch_id or permanent_batch_id in coach's batches
+        # 2) OR lead has associated student assigned to batches via StudentBatchLink
+        from backend.models import BatchCoachLink, StudentBatchLink, Student
+        from sqlmodel import select
+        
+        # Get coach's assigned batch IDs
+        coach_batch_ids = db.exec(
+            select(BatchCoachLink.batch_id).where(BatchCoachLink.user_id == current_user.id)
+        ).all()
+        coach_batch_ids_list = list(coach_batch_ids)
+        
+        if not coach_batch_ids_list:
+            raise HTTPException(status_code=403, detail="You don't have any assigned batches")
+        
+        # Check if lead is in coach's batches via trial_batch_id or permanent_batch_id
+        lead_in_batch = (
+            (lead.trial_batch_id and lead.trial_batch_id in coach_batch_ids_list) or
+            (lead.permanent_batch_id and lead.permanent_batch_id in coach_batch_ids_list)
+        )
+        
+        # If not, check if lead has associated student assigned to coach's batches
+        student_in_batch = False
+        if not lead_in_batch:
+            student = db.exec(select(Student).where(Student.lead_id == lead_id)).first()
+            if student:
+                # Check if student is assigned to any of coach's batches
+                student_batch_links = db.exec(
+                    select(StudentBatchLink.batch_id).where(
+                        StudentBatchLink.student_id == student.id,
+                        StudentBatchLink.batch_id.in_(coach_batch_ids_list)
+                    )
+                ).all()
+                student_in_batch = len(list(student_batch_links)) > 0
+        
+        if not lead_in_batch and not student_in_batch:
+            raise HTTPException(status_code=403, detail="You don't have access to update this lead/student")
+        
+        # Coaches can only update skill_reports (not other metadata)
+        # Check if metadata contains only skill_reports field
+        if set(metadata.keys()) != {'skill_reports'}:
+            raise HTTPException(status_code=403, detail="Coaches can only update skill reports")
+    elif current_user.role == "team_lead":
+        # Team leads can update any metadata
+        pass
+    else:
+        # Regular users (sales) can update leads in their assigned centers
         user_center_ids = [c.id for c in current_user.centers]
         if lead.center_id not in user_center_ids:
             raise HTTPException(status_code=403, detail="Not authorized to update this lead")
@@ -720,6 +1253,57 @@ def get_command_center_analytics(
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
     
     return get_command_center_analytics(db, current_user, target)
+
+
+@app.get("/students/{student_id}/milestones")
+def get_student_milestones_endpoint(
+    student_id: int,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get milestone information for a specific student.
+    
+    Returns total sessions attended and milestone information.
+    """
+    from backend.core.analytics import get_student_milestones
+    from backend.models import Student, BatchCoachLink, StudentBatchLink
+    from sqlmodel import select
+    
+    # Verify student exists and user has access
+    student = db.get(Student, student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    # Check access permissions based on role
+    if current_user.role == "coach":
+        # Coaches can view milestones for students in their assigned batches
+        coach_batch_ids = db.exec(
+            select(BatchCoachLink.batch_id).where(BatchCoachLink.user_id == current_user.id)
+        ).all()
+        coach_batch_ids_list = list(coach_batch_ids)
+        
+        if not coach_batch_ids_list:
+            raise HTTPException(status_code=403, detail="You don't have any assigned batches")
+        
+        # Check if student is assigned to any of coach's batches
+        student_batch_links = db.exec(
+            select(StudentBatchLink.batch_id).where(
+                StudentBatchLink.student_id == student_id,
+                StudentBatchLink.batch_id.in_(coach_batch_ids_list)
+            )
+        ).all()
+        
+        if not list(student_batch_links):
+            raise HTTPException(status_code=403, detail="Not authorized to view this student")
+    elif current_user.role != "team_lead":
+        # Regular users (sales) can view students in their assigned centers
+        center_ids = [c.id for c in current_user.centers]
+        if student.center_id not in center_ids:
+            raise HTTPException(status_code=403, detail="Not authorized to view this student")
+    
+    milestones = get_student_milestones(db, student_id)
+    return milestones
 
 
 @app.post("/subscriptions/run-expiry-check")
@@ -1012,19 +1596,36 @@ async def promote_staging_lead_endpoint(
 # --- ATTENDANCE ENDPOINTS ---
 @app.post("/attendance/check-in")
 async def check_in_endpoint(
-    lead_id: int,
     batch_id: int,
     status: str,  # 'Present', 'Absent', 'Excused', 'Late'
+    lead_id: Optional[int] = None,
+    student_id: Optional[int] = None,
     date: Optional[str] = None,  # YYYY-MM-DD format, defaults to today
     remarks: Optional[str] = None,
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Record attendance for a lead in a batch.
+    Record attendance for a lead or student in a batch.
     Only coaches assigned to the batch can record attendance.
+    Must provide either lead_id (for trial students) or student_id (for active students).
     """
     from datetime import date as date_class
+    from backend.models import Student
+    
+    # Validate that at least one ID is provided
+    if not lead_id and not student_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Either lead_id or student_id must be provided"
+        )
+    
+    # If student_id is provided, look up the associated lead_id
+    if student_id and not lead_id:
+        student = db.get(Student, student_id)
+        if not student:
+            raise HTTPException(status_code=404, detail=f"Student {student_id} not found")
+        lead_id = student.lead_id
     
     # Parse date if provided
     attendance_date = None
@@ -1054,6 +1655,7 @@ async def check_in_endpoint(
             "status": "success",
             "attendance_id": attendance.id,
             "lead_id": attendance.lead_id,
+            "student_id": attendance.student_id,
             "batch_id": attendance.batch_id,
             "date": attendance.date.isoformat(),
             "status": attendance.status
@@ -1216,6 +1818,17 @@ def get_batches_endpoint(
     # Get coaches for each batch
     batches_with_coaches = []
     for batch in batches:
+        # Build schedule string from day flags
+        schedule_days = []
+        if batch.is_mon: schedule_days.append("Mon")
+        if batch.is_tue: schedule_days.append("Tue")
+        if batch.is_wed: schedule_days.append("Wed")
+        if batch.is_thu: schedule_days.append("Thu")
+        if batch.is_fri: schedule_days.append("Fri")
+        if batch.is_sat: schedule_days.append("Sat")
+        if batch.is_sun: schedule_days.append("Sun")
+        schedule_string = ", ".join(schedule_days) if schedule_days else "No days selected"
+        
         batch_dict = {
             "id": batch.id,
             "name": batch.name,
@@ -1229,8 +1842,11 @@ def get_batches_endpoint(
             "is_fri": batch.is_fri,
             "is_sat": batch.is_sat,
             "is_sun": batch.is_sun,
-            "start_time": batch.start_time.isoformat() if batch.start_time else None,
-            "end_time": batch.end_time.isoformat() if batch.end_time else None,
+            "start_time": batch.start_time.strftime("%H:%M:%S") if batch.start_time else None,  # Format as HH:MM:SS string
+            "end_time": batch.end_time.strftime("%H:%M:%S") if batch.end_time else None,  # Format as HH:MM:SS string
+            "start_date": batch.start_date.isoformat() if batch.start_date else None,
+            "is_active": batch.is_active,
+            "schedule_days": schedule_string,  # Human-readable schedule string
             "coaches": [{"id": c.id, "full_name": c.full_name, "email": c.email} for c in get_batch_coaches(db, batch.id)]
         }
         batches_with_coaches.append(batch_dict)
@@ -1247,7 +1863,7 @@ def get_potential_reactivations_endpoint(
     """
     Get potential leads to re-activate for a new batch.
     
-    Returns leads with matching center and age category that are in Nurture status
+    Returns leads with matching center and age category that are in Nurture, On Break,
     or Dead with 'Timing Mismatch' reason, and do_not_contact is False.
     """
     if current_user.role not in ["team_lead", "regular_user"]:
@@ -1261,6 +1877,28 @@ def get_potential_reactivations_endpoint(
         return {"leads": serialized_leads, "count": len(serialized_leads)}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/leads/{lead_id}/nudge")
+def send_nudge_endpoint(
+    lead_id: int,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Send a re-engagement nudge to a lead (Nurture or On Break status).
+    Increments nudge_count and returns the updated count.
+    """
+    try:
+        updated_lead = increment_nudge_count(db, lead_id, current_user.id)
+        return {
+            "message": "Nudge sent successfully",
+            "nudge_count": updated_lead.nudge_count
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error sending nudge: {str(e)}")
 
 
 @app.post("/batches")
@@ -1496,6 +2134,133 @@ def get_my_batches_endpoint(
 
 
 # ==========================================
+# APPROVALS ENDPOINTS
+# ==========================================
+
+@app.post("/approvals/request")
+def create_status_change_request_endpoint(
+    lead_id: int,
+    current_status: str,
+    requested_status: str,
+    reason: str,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Submit a new status change request (regular users only)."""
+    try:
+        request = create_request(
+            db=db,
+            lead_id=lead_id,
+            requested_by_id=current_user.id,
+            current_status=current_status,
+            requested_status=requested_status,
+            reason=reason
+        )
+        return {
+            "status": "success",
+            "message": "Request submitted for approval",
+            "request_id": request.id
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/approvals/pending")
+def get_pending_requests_endpoint(
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all pending status change requests (team leads only)."""
+    if current_user.role != "team_lead":
+        raise HTTPException(status_code=403, detail="Only team leads can view pending requests")
+    
+    requests = get_pending_requests(db)
+    
+    # Format response with lead and user details
+    formatted_requests = []
+    for req in requests:
+        lead = db.get(Lead, req.lead_id)
+        requester = db.get(User, req.requested_by_id)
+        
+        formatted_requests.append({
+            "id": req.id,
+            "lead_id": req.lead_id,
+            "lead_name": lead.player_name if lead else "Unknown",
+            "requested_by_id": req.requested_by_id,
+            "requested_by_name": requester.full_name if requester else "Unknown",
+            "current_status": req.current_status,
+            "requested_status": req.requested_status,
+            "reason": req.reason,
+            "request_status": req.request_status,
+            "created_at": req.created_at.isoformat() if req.created_at else None,
+        })
+    
+    return {"requests": formatted_requests, "count": len(formatted_requests)}
+
+
+@app.post("/approvals/{request_id}/resolve")
+def resolve_request_endpoint(
+    request_id: int,
+    approved: bool,
+    resolution_note: Optional[str] = None,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Approve or reject a status change request (team leads only)."""
+    if current_user.role != "team_lead":
+        raise HTTPException(status_code=403, detail="Only team leads can resolve requests")
+    
+    try:
+        request = resolve_request(
+            db=db,
+            request_id=request_id,
+            resolved_by_id=current_user.id,
+            approved=approved,
+            resolution_note=resolution_note
+        )
+        return {
+            "status": "success",
+            "message": f"Request {'approved' if approved else 'rejected'}",
+            "request": {
+                "id": request.id,
+                "request_status": request.request_status,
+                "resolved_at": request.resolved_at.isoformat() if request.resolved_at else None,
+            }
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/approvals/lead/{lead_id}")
+def get_lead_requests_endpoint(
+    lead_id: int,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get all status change requests for a specific lead."""
+    requests = get_requests_for_lead(db, lead_id)
+    
+    formatted_requests = []
+    for req in requests:
+        requester = db.get(User, req.requested_by_id)
+        resolver = db.get(User, req.resolved_by_id) if req.resolved_by_id else None
+        
+        formatted_requests.append({
+            "id": req.id,
+            "current_status": req.current_status,
+            "requested_status": req.requested_status,
+            "reason": req.reason,
+            "request_status": req.request_status,
+            "requested_by_name": requester.full_name if requester else "Unknown",
+            "resolved_by_name": resolver.full_name if resolver else None,
+            "created_at": req.created_at.isoformat() if req.created_at else None,
+            "resolved_at": req.resolved_at.isoformat() if req.resolved_at else None,
+        })
+    
+    return {"requests": formatted_requests}
+
+
+# ==========================================
 # PUBLIC ENDPOINTS (No Authentication Required)
 # ==========================================
 
@@ -1537,5 +2302,31 @@ def update_lead_preferences_public(
         if not updated_lead:
             raise HTTPException(status_code=404, detail="Lead not found")
         return {"message": "Preferences updated successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/public/lead-feedback/{token}")
+def record_lead_feedback_public(
+    token: str,
+    loss_reason: str,
+    loss_reason_notes: Optional[str] = None,
+    db: Session = Depends(get_session)
+):
+    """
+    Record feedback from a lead who is not interested (no auth required).
+    
+    Sets status to 'Dead/Not Interested', do_not_contact to True, and saves loss_reason.
+    """
+    try:
+        updated_lead = record_lead_feedback_by_token(
+            db,
+            token,
+            loss_reason=loss_reason,
+            loss_reason_notes=loss_reason_notes
+        )
+        if not updated_lead:
+            raise HTTPException(status_code=404, detail="Lead not found")
+        return {"message": "Feedback recorded successfully. We have removed you from our contact list."}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

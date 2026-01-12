@@ -3,6 +3,8 @@
 import { useState, FormEvent } from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
+import Image from 'next/image';
+import type { AuthUser } from '@/types';
 
 export function LoginForm() {
   const [email, setEmail] = useState('');
@@ -18,8 +20,13 @@ export function LoginForm() {
     setIsLoading(true);
 
     try {
-      await login(email, password);
-      router.push('/dashboard');
+      const userData: AuthUser = await login(email, password);
+      // Redirect based on role
+      if (userData.role === 'coach') {
+        router.push('/coach/dashboard');
+      } else {
+        router.push('/command-center');
+      }
     } catch (err: any) {
       console.error('Login error:', err);
       // Better error handling
@@ -38,24 +45,36 @@ export function LoginForm() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-primary py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8">
-        {/* Logo and Title */}
-        <div className="text-center">
-          <div className="text-6xl mb-4">⚽</div>
-          <h1 className="text-4xl font-bold text-white mb-2">
-            TOFA Academy CRM
-          </h1>
-          <p className="text-white opacity-90">
-            Welcome back! Please sign in to continue.
-          </p>
-        </div>
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 py-12 px-4 sm:px-6 lg:px-8 animate-in fade-in duration-700">
+      <div className="max-w-md w-full">
+        {/* Premium Login Card */}
+        <div className="bg-white/10 backdrop-blur-lg rounded-2xl shadow-2xl border border-yellow-600/30 p-8 animate-in fade-in slide-in-from-bottom-4 duration-700">
+          {/* Logo */}
+          <div className="flex justify-center mb-6">
+            <Image
+              src="/logo.png"
+              alt="TOFA Logo"
+              width={120}
+              height={120}
+              className="object-contain"
+              priority
+            />
+          </div>
 
-        {/* Login Form */}
-        <div className="bg-white rounded-lg shadow-xl p-8">
+          {/* Title */}
+          <div className="text-center mb-8">
+            <h1 className="text-2xl font-black text-white uppercase tracking-tight mb-2">
+              TOFA COMMAND CENTER
+            </h1>
+            <p className="text-sm text-gray-300 font-medium">
+              Academy Management System
+            </p>
+          </div>
+
+          {/* Login Form */}
           <form onSubmit={handleSubmit} className="space-y-6">
             {error && (
-              <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+              <div className="bg-red-500/20 backdrop-blur-sm border border-red-500/50 text-red-100 px-4 py-3 rounded-lg text-sm font-medium">
                 ❌ {error}
               </div>
             )}
@@ -63,9 +82,9 @@ export function LoginForm() {
             <div>
               <label
                 htmlFor="email"
-                className="block text-sm font-medium text-gray-700 mb-2"
+                className="block text-sm font-bold text-white mb-2 uppercase tracking-wide"
               >
-                📧 Email
+                Email
               </label>
               <input
                 id="email"
@@ -74,16 +93,16 @@ export function LoginForm() {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 placeholder="Enter your email"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                className="w-full px-4 py-3 bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg text-white placeholder:text-gray-400 focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500/50 outline-none transition-all"
               />
             </div>
 
             <div>
               <label
                 htmlFor="password"
-                className="block text-sm font-medium text-gray-700 mb-2"
+                className="block text-sm font-bold text-white mb-2 uppercase tracking-wide"
               >
-                🔒 Password
+                Password
               </label>
               <input
                 id="password"
@@ -92,16 +111,16 @@ export function LoginForm() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 placeholder="Enter your password"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                className="w-full px-4 py-3 bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg text-white placeholder:text-gray-400 focus:ring-2 focus:ring-yellow-500 focus:border-yellow-500/50 outline-none transition-all"
               />
             </div>
 
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full bg-gradient-primary text-white font-semibold py-3 px-4 rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
+              className="w-full bg-gradient-to-r from-yellow-500 via-amber-600 to-yellow-700 text-tofa-navy font-black py-4 px-6 rounded-lg hover:from-yellow-600 hover:via-amber-700 hover:to-yellow-800 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed shadow-xl hover:shadow-2xl uppercase tracking-wide text-sm active:scale-95"
             >
-              {isLoading ? 'Logging in...' : '🚀 Login'}
+              {isLoading ? 'Logging in...' : 'Sign In'}
             </button>
           </form>
         </div>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { useAuth } from '@/context/AuthContext';
 import { useBatches, useCreateBatch, useAssignCoachToBatch, useUpdateBatch, useDeleteBatch } from '@/hooks/useBatches';
@@ -12,28 +13,19 @@ import type { BatchCreate } from '@/types';
 import { formatDate } from '@/lib/utils';
 
 export default function BatchesPage() {
+  // ALL HOOKS MUST BE CALLED BEFORE ANY CONDITIONAL RETURNS
   const { user } = useAuth();
+  const router = useRouter();
+  
+  // State hooks - ALL must be before any conditional returns
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null);
-  const [selectedBatch, setSelectedBatch] = useState<any>(null);
-  
-  const { data: batchesData, isLoading } = useBatches();
-  const { data: usersData } = useUsers();
-  const { data: centersData } = useCenters();
-  const createBatchMutation = useCreateBatch();
-  const assignCoachMutation = useAssignCoachToBatch();
-  const updateBatchMutation = useUpdateBatch();
-  const deleteBatchMutation = useDeleteBatch();
-  
-  const batches = batchesData || [];
-  const centers = centersData || [];
-  const users = usersData || [];
-  const coaches = users.filter(u => u.role === 'coach');
-  
-  // Form state for creating batch
+  const [updatingBatchId, setUpdatingBatchId] = useState<number | null>(null);
+  const [selectedAgeCategories, setSelectedAgeCategories] = useState<string[]>([]);
+  const [editModalInitialized, setEditModalInitialized] = useState(false);
   const [newBatch, setNewBatch] = useState<BatchCreate>({
     name: '',
     center_id: 0,
@@ -52,16 +44,85 @@ export default function BatchesPage() {
     is_active: true,
     coach_ids: [], // Multiple coach selection
   });
-  
-  // Form state for assigning coaches
   const [selectedCoachIds, setSelectedCoachIds] = useState<number[]>([]);
+  
+  // Data fetching hooks - ALL must be before any conditional returns
+  const { data: batchesData, isLoading } = useBatches();
+  const { data: usersData } = useUsers();
+  const { data: centersData } = useCenters();
+  
+  // Mutation hooks - ALL must be before any conditional returns
+  const createBatchMutation = useCreateBatch();
+  const assignCoachMutation = useAssignCoachToBatch();
+  const updateBatchMutation = useUpdateBatch();
+  const deleteBatchMutation = useDeleteBatch();
+  
+  // Derived data - computed before early return
+  const batches = batchesData || [];
+  const centers = centersData || [];
+  const users = usersData || [];
+  const coaches = users.filter(u => u.role === 'coach');
+  const ageCategoryOptions = ['U7', 'U9', 'U11', 'U13', 'U15', 'U17', 'Senior'];
+  
+  // Route protection: Redirect non-team-leads
+  useEffect(() => {
+    if (user && user.role !== 'team_lead') {
+      toast.error('Access denied. Only team leads can manage batches.');
+      router.push('/command-center');
+    }
+  }, [user, router]);
+  
+  // Initialize edit modal form when batch is selected
+  useEffect(() => {
+    if (showEditModal && selectedBatchId) {
+      const batch = batches.find(b => b.id === selectedBatchId);
+      if (batch && !editModalInitialized) {
+        setSelectedAgeCategories(batch.age_category ? batch.age_category.split(',').map((s: string) => s.trim()) : []);
+        setNewBatch({
+          name: batch.name,
+          center_id: batch.center_id,
+          age_category: batch.age_category,
+          max_capacity: batch.max_capacity,
+          is_mon: batch.is_mon,
+          is_tue: batch.is_tue,
+          is_wed: batch.is_wed,
+          is_thu: batch.is_thu,
+          is_fri: batch.is_fri,
+          is_sat: batch.is_sat,
+          is_sun: batch.is_sun,
+          start_time: batch.start_time ? batch.start_time.substring(0, 5) : null,
+          end_time: batch.end_time ? batch.end_time.substring(0, 5) : null,
+          start_date: batch.start_date || new Date().toISOString().split('T')[0],
+          is_active: batch.is_active === true,
+          coach_ids: batch.coaches?.map((c: any) => c.id) || [],
+        });
+        setEditModalInitialized(true);
+      }
+    } else {
+      setEditModalInitialized(false);
+    }
+  }, [showEditModal, selectedBatchId, batches, editModalInitialized]);
+  
+  // Show access denied message if not team lead (AFTER all hooks)
+  if (!user || user.role !== 'team_lead') {
+    return (
+      <MainLayout>
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="text-center">
+            <h1 className="text-2xl font-bold text-gray-900 mb-2">Access Denied</h1>
+            <p className="text-gray-600">Only team leads can access batch management.</p>
+          </div>
+        </div>
+      </MainLayout>
+    );
+  }
   
   // Validation helpers
   const hasScheduleDays = newBatch.is_mon || newBatch.is_tue || newBatch.is_wed || newBatch.is_thu || newBatch.is_fri || newBatch.is_sat || newBatch.is_sun;
   const isFormValid = hasScheduleDays;
 
   const handleCreateBatch = async () => {
-    if (!newBatch.name || !newBatch.center_id || !newBatch.age_category || !newBatch.start_date) {
+    if (!newBatch.name || !newBatch.center_id || selectedAgeCategories.length === 0 || !newBatch.start_date) {
       toast.error('Please fill in all required fields');
       return;
     }
@@ -77,8 +138,12 @@ export default function BatchesPage() {
     }
     
     try {
-      await createBatchMutation.mutateAsync(newBatch);
+      await createBatchMutation.mutateAsync({
+        ...newBatch,
+        age_category: selectedAgeCategories.join(','),
+      });
       setShowCreateModal(false);
+      setSelectedAgeCategories([]);
       setNewBatch({
         name: '',
         center_id: 0,
@@ -121,29 +186,13 @@ export default function BatchesPage() {
     }
   };
 
-  const handleEditBatch = (batch: any) => {
-    setSelectedBatch(batch);
-    setNewBatch({
-      name: batch.name,
-      center_id: batch.center_id,
-      age_category: batch.age_category,
-      max_capacity: batch.max_capacity,
-      is_mon: batch.is_mon,
-      is_tue: batch.is_tue,
-      is_wed: batch.is_wed,
-      is_thu: batch.is_thu,
-      is_fri: batch.is_fri,
-      is_sat: batch.is_sat,
-      is_sun: batch.is_sun,
-      start_time: batch.start_time ? batch.start_time.substring(0, 5) : null,
-      end_time: batch.end_time ? batch.end_time.substring(0, 5) : null,
-      coach_ids: batch.coaches?.map((c: any) => c.id) || [],
-    });
+  const handleEditBatch = (batchId: number) => {
+    setSelectedBatchId(batchId);
     setShowEditModal(true);
   };
 
   const handleUpdateBatch = async () => {
-    if (!selectedBatch || !newBatch.name || !newBatch.center_id || !newBatch.age_category) {
+    if (!selectedBatchId || !newBatch.name || !newBatch.center_id || selectedAgeCategories.length === 0) {
       toast.error('Please fill in all required fields');
       return;
     }
@@ -155,11 +204,15 @@ export default function BatchesPage() {
     
     try {
       await updateBatchMutation.mutateAsync({
-        batchId: selectedBatch.id,
-        data: newBatch,
+        batchId: selectedBatchId,
+        data: {
+          ...newBatch,
+          age_category: selectedAgeCategories.join(','),
+        },
       });
       setShowEditModal(false);
-      setSelectedBatch(null);
+      setSelectedBatchId(null);
+      setSelectedAgeCategories([]);
       setNewBatch({
         name: '',
         center_id: 0,
@@ -174,6 +227,8 @@ export default function BatchesPage() {
         is_sun: false,
         start_time: null,
         end_time: null,
+        start_date: new Date().toISOString().split('T')[0],
+        is_active: true,
         coach_ids: [],
       });
     } catch (error) {
@@ -188,7 +243,6 @@ export default function BatchesPage() {
       await deleteBatchMutation.mutateAsync(selectedBatchId);
       setShowDeleteModal(false);
       setSelectedBatchId(null);
-      setSelectedBatch(null);
     } catch (error) {
       // Error handled in hook
     }
@@ -233,13 +287,15 @@ export default function BatchesPage() {
             <h1 className="text-3xl font-bold text-gray-900">📅 Batch Management</h1>
             <p className="text-gray-600 mt-2">Manage training batches and coach assignments</p>
           </div>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition-colors shadow-md"
-          >
-            <Plus className="h-5 w-5" />
-            Add New Batch
-          </button>
+          {user?.role === 'team_lead' && (
+            <button
+              onClick={() => setShowCreateModal(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-lg transition-colors shadow-md"
+            >
+              <Plus className="h-5 w-5" />
+              Add New Batch
+            </button>
+          )}
         </div>
 
         {/* Batches Table */}
@@ -274,9 +330,6 @@ export default function BatchesPage() {
                       Schedule
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Details
-                    </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Status
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -294,8 +347,13 @@ export default function BatchesPage() {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {batches.map((batch) => (
-                    <tr key={batch.id} className="hover:bg-gray-50">
+                  {batches.map((batch) => {
+                    const isUpdating = updatingBatchId === batch.id && updateBatchMutation.isPending;
+                    return (
+                    <tr 
+                      key={batch.id} 
+                      className={`hover:bg-gray-50 ${isUpdating ? 'opacity-60' : ''}`}
+                    >
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                         {batch.name}
                       </td>
@@ -303,24 +361,42 @@ export default function BatchesPage() {
                         {getCenterName(batch.center_id)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {batch.age_category}
+                        {batch.age_category ? batch.age_category.split(',').map((cat: string) => cat.trim()).join(', ') : '—'}
                       </td>
-                      <td className="px-6 py-4 text-sm text-gray-500">
+                      <td className="px-6 py-4 text-sm text-gray-500 whitespace-normal">
                         {getScheduleDisplay(batch)}
                       </td>
-                      <td className="px-6 py-4 text-sm text-gray-500">
-                        {batch.start_date ? `Started: ${formatDate(batch.start_date)}` : '—'}
-                      </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        {batch.is_active !== false ? (
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                            Active
+                        <label className={`relative inline-flex items-center ${user?.role === 'team_lead' ? 'cursor-pointer' : 'cursor-not-allowed'}`}>
+                          <input
+                            type="checkbox"
+                            checked={batch.is_active === true}
+                            onChange={async (e) => {
+                              if (user?.role !== 'team_lead') return;
+                              const newStatus = e.target.checked;
+                              setUpdatingBatchId(batch.id);
+                              try {
+                                await updateBatchMutation.mutateAsync({
+                                  batchId: batch.id,
+                                  data: { is_active: newStatus },
+                                });
+                                toast.success(`Batch ${newStatus ? 'activated' : 'deactivated'} successfully!`);
+                              } catch (err: any) {
+                                const errorMessage = err?.response?.data?.detail || err?.message || 'Failed to update batch status';
+                                toast.error(`Failed to update batch: ${errorMessage}`);
+                              } finally {
+                                setUpdatingBatchId(null);
+                              }
+                            }}
+                            className="sr-only peer"
+                            disabled={isUpdating || user?.role !== 'team_lead'}
+                            readOnly={user?.role !== 'team_lead'}
+                          />
+                          <div className={`w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600 ${user?.role !== 'team_lead' ? 'opacity-50' : ''}`}></div>
+                          <span className="ml-3 text-sm font-medium text-gray-700">
+                            {batch.is_active === true ? 'Active' : 'Inactive'}
                           </span>
-                        ) : (
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                            Inactive
-                          </span>
-                        )}
+                        </label>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {batch.max_capacity}
@@ -347,40 +423,19 @@ export default function BatchesPage() {
                         )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm">
-                        <div className="flex items-center gap-2">
+                        {user?.role === 'team_lead' && (
                           <button
-                            onClick={() => handleEditBatch(batch)}
+                            onClick={() => handleEditBatch(batch.id)}
                             className="flex items-center gap-1 px-3 py-1 bg-blue-100 text-blue-700 hover:bg-blue-200 rounded-lg transition-colors text-sm font-medium"
                           >
                             <Edit className="h-4 w-4" />
                             Edit
                           </button>
-                          <button
-                            onClick={() => {
-                              setSelectedBatchId(batch.id);
-                              setSelectedBatch(batch);
-                              setShowDeleteModal(true);
-                            }}
-                            className="flex items-center gap-1 px-3 py-1 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg transition-colors text-sm font-medium"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            Delete
-                          </button>
-                          <button
-                            onClick={() => {
-                              setSelectedBatchId(batch.id);
-                              setSelectedCoachIds(batch.coaches?.map(c => c.id) || []);
-                              setShowAssignModal(true);
-                            }}
-                            className="flex items-center gap-1 px-3 py-1 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 rounded-lg transition-colors text-sm font-medium"
-                          >
-                            <UserPlus className="h-4 w-4" />
-                            Assign
-                          </button>
-                        </div>
+                        )}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -433,26 +488,37 @@ export default function BatchesPage() {
                       ))}
                     </select>
                   </div>
+                </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Age Category *
-                    </label>
-                    <select
-                      value={newBatch.age_category}
-                      onChange={(e) => setNewBatch({ ...newBatch, age_category: e.target.value })}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                    >
-                      <option value="">Select Age Category</option>
-                      <option value="U7">U7</option>
-                      <option value="U9">U9</option>
-                      <option value="U11">U11</option>
-                      <option value="U13">U13</option>
-                      <option value="U15">U15</option>
-                      <option value="U17">U17</option>
-                      <option value="Senior">Senior</option>
-                    </select>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Age Categories *
+                  </label>
+                  <div className="flex flex-wrap gap-2 border border-gray-300 rounded-lg p-3 min-h-[3rem]">
+                    {ageCategoryOptions.map((category) => (
+                      <label
+                        key={category}
+                        className="flex items-center gap-2 cursor-pointer bg-gray-50 px-3 py-2 rounded-lg hover:bg-gray-100"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedAgeCategories.includes(category)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedAgeCategories([...selectedAgeCategories, category]);
+                            } else {
+                              setSelectedAgeCategories(selectedAgeCategories.filter(cat => cat !== category));
+                            }
+                          }}
+                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="text-sm">{category}</span>
+                      </label>
+                    ))}
                   </div>
+                  {selectedAgeCategories.length === 0 && (
+                    <p className="text-xs text-red-500 mt-1">Please select at least one age category</p>
+                  )}
                 </div>
 
                 <div>
@@ -579,15 +645,19 @@ export default function BatchesPage() {
                 </div>
 
                 <div>
-                  <label className="flex items-center gap-3 cursor-pointer">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Status
+                  </label>
+                  <label className="relative inline-flex items-center cursor-pointer">
                     <input
                       type="checkbox"
                       checked={newBatch.is_active}
                       onChange={(e) => setNewBatch({ ...newBatch, is_active: e.target.checked })}
-                      className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                      className="sr-only peer"
                     />
-                    <span className="block text-sm font-medium text-gray-700">
-                      Active Status (Uncheck to make batch inactive)
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                    <span className="ml-3 text-sm font-medium text-gray-700">
+                      {newBatch.is_active ? 'Active' : 'Inactive'}
                     </span>
                   </label>
                 </div>
@@ -693,23 +763,31 @@ export default function BatchesPage() {
         )}
 
         {/* Edit Batch Modal */}
-        {showEditModal && selectedBatch && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-            <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-              <div className="flex items-center justify-between p-6 border-b border-gray-200">
-                <h2 className="text-xl font-semibold text-gray-900">Edit Batch</h2>
-                <button
-                  onClick={() => {
-                    setShowEditModal(false);
-                    setSelectedBatch(null);
-                  }}
-                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                >
-                  <X className="h-5 w-5 text-gray-500" />
-                </button>
-              </div>
+        {showEditModal && selectedBatchId && (() => {
+          // Get live batch data from query cache
+          const batch = batches.find(b => b.id === selectedBatchId);
+          
+          if (!batch) {
+            return null;
+          }
+          
+          return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+              <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
+                <div className="flex items-center justify-between p-6 border-b border-gray-200">
+                  <h2 className="text-xl font-semibold text-gray-900">Edit Batch</h2>
+                  <button
+                    onClick={() => {
+                      setShowEditModal(false);
+                      setSelectedBatchId(null);
+                    }}
+                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    <X className="h-5 w-5 text-gray-500" />
+                  </button>
+                </div>
 
-              <div className="p-6 space-y-4">
+                <div className="p-6 space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Batch Name *
@@ -741,26 +819,37 @@ export default function BatchesPage() {
                       ))}
                     </select>
                   </div>
+                </div>
 
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Age Category *
-                    </label>
-                    <select
-                      value={newBatch.age_category}
-                      onChange={(e) => setNewBatch({ ...newBatch, age_category: e.target.value })}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
-                    >
-                      <option value="">Select Age Category</option>
-                      <option value="U7">U7</option>
-                      <option value="U9">U9</option>
-                      <option value="U11">U11</option>
-                      <option value="U13">U13</option>
-                      <option value="U15">U15</option>
-                      <option value="U17">U17</option>
-                      <option value="Senior">Senior</option>
-                    </select>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Age Categories *
+                  </label>
+                  <div className="flex flex-wrap gap-2 border border-gray-300 rounded-lg p-3 min-h-[3rem]">
+                    {ageCategoryOptions.map((category) => (
+                      <label
+                        key={category}
+                        className="flex items-center gap-2 cursor-pointer bg-gray-50 px-3 py-2 rounded-lg hover:bg-gray-100"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedAgeCategories.includes(category)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedAgeCategories([...selectedAgeCategories, category]);
+                            } else {
+                              setSelectedAgeCategories(selectedAgeCategories.filter(cat => cat !== category));
+                            }
+                          }}
+                          className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="text-sm">{category}</span>
+                      </label>
+                    ))}
                   </div>
+                  {selectedAgeCategories.length === 0 && (
+                    <p className="text-xs text-red-500 mt-1">Please select at least one age category</p>
+                  )}
                 </div>
 
                 <div>
@@ -887,15 +976,19 @@ export default function BatchesPage() {
                 </div>
 
                 <div>
-                  <label className="flex items-center gap-3 cursor-pointer">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Status
+                  </label>
+                  <label className="relative inline-flex items-center cursor-pointer">
                     <input
                       type="checkbox"
                       checked={newBatch.is_active}
                       onChange={(e) => setNewBatch({ ...newBatch, is_active: e.target.checked })}
-                      className="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500"
+                      className="sr-only peer"
                     />
-                    <span className="block text-sm font-medium text-gray-700">
-                      Active Status (Uncheck to make batch inactive)
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+                    <span className="ml-3 text-sm font-medium text-gray-700">
+                      {newBatch.is_active ? 'Active' : 'Inactive'}
                     </span>
                   </label>
                 </div>
@@ -905,7 +998,7 @@ export default function BatchesPage() {
                 <button
                   onClick={() => {
                     setShowEditModal(false);
-                    setSelectedBatch(null);
+                    setSelectedBatchId(null);
                   }}
                   className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
                 >
@@ -921,10 +1014,18 @@ export default function BatchesPage() {
               </div>
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* Delete Confirmation Modal */}
-        {showDeleteModal && selectedBatchId && selectedBatch && (
+        {showDeleteModal && selectedBatchId && (() => {
+          const batch = batches.find(b => b.id === selectedBatchId);
+          if (!batch) {
+            setShowDeleteModal(false);
+            setSelectedBatchId(null);
+            return null;
+          }
+          return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
             <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
               <div className="flex items-center justify-between p-6 border-b border-gray-200">
@@ -933,7 +1034,6 @@ export default function BatchesPage() {
                   onClick={() => {
                     setShowDeleteModal(false);
                     setSelectedBatchId(null);
-                    setSelectedBatch(null);
                   }}
                   className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                 >
@@ -943,7 +1043,7 @@ export default function BatchesPage() {
 
               <div className="p-6">
                 <p className="text-gray-700 mb-4">
-                  Are you sure you want to delete the batch <span className="font-semibold">"{selectedBatch.name}"</span>?
+                  Are you sure you want to delete the batch <span className="font-semibold">"{batch.name}"</span>?
                 </p>
                 <p className="text-sm text-gray-500 mb-4">
                   This action cannot be undone. Coach assignments will be removed, but leads associated with this batch will not be deleted.
@@ -955,7 +1055,6 @@ export default function BatchesPage() {
                   onClick={() => {
                     setShowDeleteModal(false);
                     setSelectedBatchId(null);
-                    setSelectedBatch(null);
                   }}
                   className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
                 >
@@ -971,7 +1070,8 @@ export default function BatchesPage() {
               </div>
             </div>
           </div>
-        )}
+          );
+        })()}
       </div>
     </MainLayout>
   );

@@ -63,10 +63,34 @@ export function useUpdateBatch() {
   return useMutation({
     mutationFn: ({ batchId, data }: { batchId: number; data: Partial<BatchCreate> }) =>
       batchesAPI.updateBatch(batchId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['batches'] });
+    onSuccess: async (response) => {
+      // Update cache immediately with the response data
+      const updatedBatch = response.batch;
+      
+      // Update all batches queries with the new data
+      // Use predicate to match all ['batches', ...] queries (including ['batches', undefined])
+      queryClient.setQueriesData<Batch[]>(
+        { 
+          predicate: (query) => {
+            const key = query.queryKey;
+            if (!Array.isArray(key) || key.length === 0) return false;
+            // Match ['batches'] or ['batches', undefined] or ['batches', number]
+            return key[0] === 'batches' && key[1] !== 'my-batches';
+          }
+        },
+        (oldData) => {
+          if (!oldData) return oldData;
+          return oldData.map(batch => 
+            batch.id === updatedBatch.id ? updatedBatch : batch
+          );
+        }
+      );
+      
+      // Force refetch to ensure consistency
+      await queryClient.invalidateQueries({ queryKey: ['batches'] });
+      await queryClient.refetchQueries({ queryKey: ['batches'] });
       queryClient.invalidateQueries({ queryKey: ['batches', 'my-batches'] });
-      toast.success('Batch updated successfully!');
+      // Note: toast is handled by toast.promise in the UI component
     },
     onError: (error: any) => {
       const errorMessage = error?.response?.data?.detail || error?.message || 'Failed to update batch';
