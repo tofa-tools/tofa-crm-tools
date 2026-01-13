@@ -130,3 +130,13 @@ CREATE INDEX IF NOT EXISTS idx_lead_phone ON "lead" (phone);
 CREATE INDEX IF NOT EXISTS idx_audit_lead_id ON "auditlog" (lead_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_date ON "attendance" (date);
 CREATE INDEX IF NOT EXISTS idx_batch_schedule ON "batch" (is_mon, is_tue, is_wed, is_thu, is_fri, is_sat, is_sun);
+
+
+-- 1. Change the default for future users so they aren't 'regular_user'
+ALTER TABLE "user" ALTER COLUMN "role" SET DEFAULT 'team_member';
+
+-- 2. Update all existing 'regular_users' to 'team_member'
+UPDATE "user" SET "role" = 'team_member' WHERE "role" = 'regular_user';
+
+-- 3. Update the 'lead' table if any hardcoded defaults exist there (usually not needed but safe)
+UPDATE "lead" SET status = 'New' WHERE status = 'regular_user';
