@@ -35,7 +35,7 @@ export function ActionQueue({
 }: ActionQueueProps) {
   const { user } = useAuth();
   const router = useRouter();
-  const isSales = user?.role === 'team_lead' || user?.role === 'regular_user';
+  const isSales = user?.role === 'team_lead' || user?.role === 'team_member';
   const isCoach = user?.role === 'coach';
   const [selectedLeadForUpdate, setSelectedLeadForUpdate] = useState<Lead | null>(null);
 

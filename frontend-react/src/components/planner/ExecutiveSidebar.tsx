@@ -1,10 +1,17 @@
 'use client';
 
 import { useConversionRates, useTimeToContact } from '@/hooks/useAnalytics';
+import { useAuth } from '@/context/AuthContext';
 
 export function ExecutiveSidebar() {
+  const { user } = useAuth();
   const { data: conversionRatesData } = useConversionRates();
   const { data: timeToContactData } = useTimeToContact();
+
+  // Restrict access to team_lead only
+  if (user?.role !== 'team_lead') {
+    return null;
+  }
 
   return (
     <div className="bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 rounded-lg shadow-xl p-6 space-y-6">

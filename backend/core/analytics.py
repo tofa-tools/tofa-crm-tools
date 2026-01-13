@@ -221,7 +221,7 @@ def get_command_center_analytics(
     """
     Get command center analytics based on user role.
     
-    For Sales (team_lead, regular_user):
+    For Sales (team_lead, team_member):
     - Today's Progress: (Leads updated/commented today / Total leads due today)
     - Pending Trials: Count of leads with status 'New' or 'Called' (not yet booked for trial)
     - Overdue: Count of leads with next_followup_date in the past
@@ -254,7 +254,7 @@ def get_command_center_analytics(
         result = _get_sales_command_center_analytics(db, user, target_date, today_start, today_end)
         
         # Add new batch opportunities for sales users
-        if user.role in ["team_lead", "regular_user"]:
+        if user.role in ["team_lead", "team_member"]:
             result["new_batch_opportunities"] = get_new_batch_opportunities(db, user)
         
         # For team_lead, add executive analytics
@@ -786,6 +786,11 @@ def _get_executive_analytics(db: Session) -> Dict:
     all_centers = db.exec(select(Center)).all()
     attendance_leaderboard = []
     
+    # Calculate previous week range for trend comparison
+    last_14_days_start = today - timedelta(days=14)
+    previous_7_days_start = last_14_days_start
+    previous_7_days_end = last_7_days_start - timedelta(days=1)
+    
     for center in all_centers:
         # Get all batches in this center
         center_batches = db.exec(
@@ -808,9 +813,22 @@ def _get_executive_analytics(db: Session) -> Dict:
             )
         ).first() or 0
         
+        # Count previous week attendance for trend comparison
+        previous_week_attendance = db.exec(
+            select(func.count(Attendance.id)).where(
+                and_(
+                    Attendance.batch_id.in_(batch_ids),
+                    Attendance.date >= previous_7_days_start,
+                    Attendance.date <= previous_7_days_end,
+                    Attendance.status == "Present"
+                )
+            )
+        ).first() or 0
+        
         # Count total expected attendance (sum of all scheduled sessions)
         # For each batch, count how many days it should have run in last 7 days
         expected_attendance = 0
+        previous_week_expected = 0
         day_attribute_map = {
             0: "is_mon",
             1: "is_tue",
@@ -840,8 +858,34 @@ def _get_executive_analytics(db: Session) -> Dict:
                         )
                     ).first() or 0
                     expected_attendance += student_count
+            
+            # Count previous week expected attendance
+            for day_offset in range(7):
+                check_date = previous_7_days_start + timedelta(days=day_offset)
+                day_of_week = check_date.weekday()
+                day_attr = day_attribute_map.get(day_of_week)
+                
+                if day_attr and getattr(batch, day_attr, False):
+                    student_count = db.exec(
+                        select(func.count(Lead.id)).where(
+                            or_(
+                                Lead.trial_batch_id == batch.id,
+                                Lead.permanent_batch_id == batch.id
+                            ),
+                            Lead.status != "Dead/Not Interested"
+                        )
+                    ).first() or 0
+                    previous_week_expected += student_count
         
         avg_attendance_pct = (total_attendance / expected_attendance * 100) if expected_attendance > 0 else 0.0
+        previous_week_pct = (previous_week_attendance / previous_week_expected * 100) if previous_week_expected > 0 else 0.0
+        
+        # Calculate trend (up, down, or stable)
+        trend = "stable"
+        if avg_attendance_pct > previous_week_pct + 1:  # At least 1% increase
+            trend = "up"
+        elif avg_attendance_pct < previous_week_pct - 1:  # At least 1% decrease
+            trend = "down"
         
         attendance_leaderboard.append({
             "center_id": center.id,
@@ -849,6 +893,8 @@ def _get_executive_analytics(db: Session) -> Dict:
             "average_attendance_pct": round(avg_attendance_pct, 1),
             "total_attendance": total_attendance,
             "expected_attendance": expected_attendance,
+            "previous_week_pct": round(previous_week_pct, 1),
+            "trend": trend,
         })
     
     # Sort by average attendance descending
@@ -937,13 +983,28 @@ def _get_executive_analytics(db: Session) -> Dict:
                 
                 if student_count > 0:
                     center = db.get(Center, batch.center_id)
+                    # Get coaches assigned to this batch
+                    coach_links = db.exec(
+                        select(BatchCoachLink).where(BatchCoachLink.batch_id == batch.id)
+                    ).all()
+                    coaches = []
+                    for link in coach_links:
+                        coach_user = db.get(User, link.user_id)
+                        if coach_user:
+                            coaches.append({
+                                "coach_id": coach_user.id,
+                                "coach_name": coach_user.name or coach_user.email,
+                                "coach_phone": getattr(coach_user, 'phone', None) or None,
+                            })
+                    
                     coach_compliance.append({
                         "batch_id": batch.id,
                         "batch_name": batch.name,
                         "center_name": center.display_name if center else "Unknown",
-                    "date": check_date.isoformat(),
-                    "expected_students": student_count,
-                })
+                        "date": check_date.isoformat(),
+                        "expected_students": student_count,
+                        "coaches": coaches,
+                    })
     
     # 4. Loss Analysis: Breakdown of loss_reason across all Dead leads
     dead_leads = db.exec(
@@ -1038,7 +1099,7 @@ def _get_executive_analytics(db: Session) -> Dict:
     # 8. Sales Leaderboards: Speed Demons (Top 3 users by fastest avg time to first contact)
     # For each user, find leads where they created the first AuditLog entry
     # Calculate average time from Lead.created_time to first AuditLog timestamp
-    all_users = db.exec(select(User).where(User.role.in_(["team_lead", "regular_user"]))).all()
+    all_users = db.exec(select(User).where(User.role.in_(["team_lead", "team_member"]))).all()
     user_speed_data = {}
     
     for user in all_users:

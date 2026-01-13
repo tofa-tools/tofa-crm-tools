@@ -10,7 +10,7 @@ import { Edit } from 'lucide-react';
 import type { User } from '@/types';
 
 export default function UsersPage() {
-  const { user } = useAuth();
+  const { user: currentUser } = useAuth();
   const router = useRouter();
   const { data: users, isLoading: usersLoading } = useUsers();
   const { data: centers, isLoading: centersLoading } = useCenters();
@@ -22,18 +22,18 @@ export default function UsersPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [role, setRole] = useState('regular_user');
+  const [role, setRole] = useState('team_member');
   const [selectedCenters, setSelectedCenters] = useState<number[]>([]);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(true);
 
   useEffect(() => {
-    if (user && user.role !== 'team_lead') {
+    if (currentUser && currentUser.role !== 'team_lead') {
       router.push('/command-center');
     }
   }, [user, router]);
 
-  if (user?.role !== 'team_lead') {
+  if (currentUser?.role !== 'team_lead') {
     return null;
   }
 
@@ -42,7 +42,7 @@ export default function UsersPage() {
     setEmail('');
     setPassword('');
     setFullName('');
-    setRole('regular_user');
+    setRole('team_member');
     setSelectedCenters([]);
     setError('');
   };
@@ -52,7 +52,7 @@ export default function UsersPage() {
     setEmail(user.email);
     setPassword('');
     setFullName(user.full_name);
-    setRole(user.role);
+    setRole(currentUser?.role || 'team_member');
     // Note: We need to get user's centers from the backend response
     // For now, we'll set empty and let the user re-select
     setSelectedCenters(user.center_ids || []);
@@ -147,7 +147,8 @@ export default function UsersPage() {
           <p className="text-gray-600 mt-2">Create and manage user accounts</p>
         </div>
 
-        {/* Create/Edit User Form */}
+        {/* Create/Edit User Form - Hidden for observers */}
+        {currentUser?.role !== 'observer' && (
         <div ref={formRef} className="bg-white rounded-lg shadow-md p-6">
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-semibold text-gray-900">
@@ -217,7 +218,7 @@ export default function UsersPage() {
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
                   >
                     <option value="team_lead">Team Lead</option>
-                    <option value="regular_user">Regular User</option>
+                    <option value="team_member">Team Member</option>
                     <option value="observer">Observer</option>
                     <option value="coach">Coach</option>
                   </select>
@@ -280,6 +281,7 @@ export default function UsersPage() {
             </form>
           )}
         </div>
+        )}
 
         {/* Existing Users Table */}
         <div className="bg-white rounded-lg shadow-md p-6">
@@ -324,13 +326,15 @@ export default function UsersPage() {
                         {user.role.replace('_', ' ')}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm">
-                        <button
-                          onClick={() => handleEdit(user)}
-                          className="flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium"
-                        >
-                          <Edit className="h-4 w-4" />
-                          Edit
-                        </button>
+                        {currentUser?.role !== 'observer' && (
+                          <button
+                            onClick={() => handleEdit(user)}
+                            className="flex items-center gap-1 text-indigo-600 hover:text-indigo-800 font-medium"
+                          >
+                            <Edit className="h-4 w-4" />
+                            Edit
+                          </button>
+                        )}
                       </td>
                     </tr>
                   ))}

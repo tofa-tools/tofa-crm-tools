@@ -98,7 +98,7 @@ export default function LeadsPage() {
   const { data: stagingLeadsData } = useQuery({
     queryKey: ['stagingLeads'],
     queryFn: () => stagingAPI.getStagingLeads(),
-    enabled: user?.role === 'team_lead' || user?.role === 'regular_user',
+    enabled: user?.role === 'team_lead' || user?.role === 'team_member',
   });
 
   const prefetchNextPage = usePrefetchNextPage(queryParams, pageSize);
@@ -284,7 +284,7 @@ export default function LeadsPage() {
         </div>
 
         {/* Staging Banner (Restored) */}
-        {stagingLeads.length > 0 && (user?.role === 'team_lead' || user?.role === 'regular_user') && (
+        {stagingLeads.length > 0 && (user?.role === 'team_lead' || user?.role === 'team_member') && (
           <div className="bg-gradient-to-r from-indigo-600 to-violet-700 rounded-2xl p-5 text-white shadow-lg flex justify-between items-center">
             <div className="flex items-center gap-4">
               <Ghost className="w-8 h-8 opacity-80" />
@@ -326,7 +326,9 @@ export default function LeadsPage() {
           </select>
         </div>
 
-        <BulkActionsToolbar selectedLeadIds={Array.from(selectedLeadIds)} onClearSelection={() => setSelectedLeadIds(new Set())} />
+        {user?.role !== 'observer' && (
+          <BulkActionsToolbar selectedLeadIds={Array.from(selectedLeadIds)} onClearSelection={() => setSelectedLeadIds(new Set())} />
+        )}
 
         {/* Leads Table (100% Feature Restored) */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
@@ -335,7 +337,7 @@ export default function LeadsPage() {
               <thead className="bg-gray-50/50">
                 <tr className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
                   <th className="px-6 py-4 w-10">
-                    <input type="checkbox" className="rounded border-gray-300 text-indigo-600" onChange={(e) => {
+                    <input type="checkbox" disabled={user?.role === 'observer'} className="rounded border-gray-300 text-indigo-600 disabled:opacity-50 disabled:cursor-not-allowed" onChange={(e) => {
                       if (e.target.checked) setSelectedLeadIds(new Set(sortedLeadsData.map((l: Lead) => l.id)));
                       else setSelectedLeadIds(new Set());
                     }} />
@@ -394,7 +396,7 @@ export default function LeadsPage() {
                 {sortedLeadsData.length > 0 ? sortedLeadsData.map((lead: Lead) => (
                   <tr key={lead.id} onClick={() => setExpandedLeadId(lead.id)} className="group hover:bg-indigo-50/30 cursor-pointer transition-colors">
                     <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
-                      <input type="checkbox" checked={selectedLeadIds.has(lead.id)} onChange={() => {
+                      <input type="checkbox" checked={selectedLeadIds.has(lead.id)} disabled={user?.role === 'observer'} className="disabled:opacity-50 disabled:cursor-not-allowed" onChange={() => {
                         const next = new Set(selectedLeadIds);
                         if (next.has(lead.id)) next.delete(lead.id); else next.add(lead.id);
                         setSelectedLeadIds(next);

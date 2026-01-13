@@ -36,6 +36,13 @@ export default function CommandCenterPage() {
     return null;
   }
   const [currentView, setCurrentView] = useState<'sales' | 'executive'>('sales');
+  
+  // Force sales view if user is not team_lead
+  useEffect(() => {
+    if (user?.role !== 'team_lead' && currentView === 'executive') {
+      setCurrentView('sales');
+    }
+  }, [user?.role, currentView]);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<string>(
     new Date().toISOString().split('T')[0]

@@ -39,7 +39,7 @@ interface MetricCardsProps {
 
 export function MetricCards({ salesMetrics, coachMetrics, onMetricClick }: MetricCardsProps) {
   const { user } = useAuth();
-  const isSales = user?.role === 'team_lead' || user?.role === 'regular_user' || user?.role === 'team_member';
+  const isSales = user?.role === 'team_lead' || user?.role === 'team_member';
   const isCoach = user?.role === 'coach';
 
   if (isSales && salesMetrics) {

@@ -316,7 +316,8 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
   }, [lead?.status, subscriptionStartDate]);
 
   const isCoach = user?.role === 'coach';
-  const canEdit = !isCoach;
+  const isObserver = user?.role === 'observer';
+  const canEdit = !isCoach && !isObserver;
 
   // Get coach trial feedback
   const coachTrialFeedback = useMemo(() => {
@@ -713,6 +714,11 @@ ${prefUrl}`;
                 {lead.player_name}
               </h2>
               <StatusBadge status={currentStatus} />
+              {isObserver && (
+                <span className="px-3 py-1 bg-yellow-100 text-yellow-800 text-xs font-bold rounded-full border border-yellow-300">
+                  👀 Read-Only
+                </span>
+              )}
               {currentStatus === 'Joined' && (
                 <span className="px-3 py-1 bg-green-100 text-green-800 text-xs font-bold rounded-full">
                   ✨ Active Member
@@ -734,6 +740,17 @@ ${prefUrl}`;
             <X className="h-6 w-6 text-gray-500" />
           </button>
         </div>
+
+        {/* Observer Read-Only Banner */}
+        {isObserver && (
+          <div className="bg-yellow-50 border-b-4 border-yellow-400 p-4 flex items-center gap-3">
+            <span className="text-2xl">👀</span>
+            <div>
+              <p className="font-bold text-yellow-900">Read-Only Access</p>
+              <p className="text-sm text-yellow-700">You have observer permissions. All fields are view-only.</p>
+            </div>
+          </div>
+        )}
 
         {/* Scrollable Content */}
         <div className="p-8 overflow-y-auto space-y-8 flex-1">
@@ -811,7 +828,7 @@ ${prefUrl}`;
                     </div>
                     <h3 className="text-lg font-bold text-gray-900">Send Preference Link</h3>
                   </div>
-                  {!isCoach && lead.phone && lead.public_token && (
+                  {!isCoach && !isObserver && lead.phone && lead.public_token && (
                     <button
                       onClick={handleSendPreferenceLink}
                       disabled={updateLeadMutation.isPending || pendingApproval}
@@ -878,13 +895,15 @@ ${prefUrl}`;
                       )}
                     </div>
 
-                    <button
-                      onClick={handleConfirmCall}
-                      disabled={!canEdit || !callConfirmed || callSummary.trim().length < 3 || updateLeadMutation.isPending || pendingApproval}
-                      className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                    >
-                      {updateLeadMutation.isPending ? 'Confirming...' : '✓ Confirm Call'}
-                    </button>
+                    {!isObserver && (
+                      <button
+                        onClick={handleConfirmCall}
+                        disabled={!canEdit || !callConfirmed || callSummary.trim().length < 3 || updateLeadMutation.isPending || pendingApproval}
+                        className="w-full py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                      >
+                        {updateLeadMutation.isPending ? 'Confirming...' : '✓ Confirm Call'}
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -940,22 +959,24 @@ ${prefUrl}`;
                       />
                     </div>
 
-                    <div className="flex gap-3">
-                      <button
-                        onClick={handleScheduleTrial}
-                        disabled={!canEdit || !trialBatchId || updateLeadMutation.isPending || pendingApproval}
-                        className="flex-1 py-3 bg-purple-600 text-white font-bold rounded-xl hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
-                      >
-                        {updateLeadMutation.isPending ? 'Scheduling...' : '✓ Schedule Trial'}
-                      </button>
-                      <button
-                        onClick={handleRevertStatus}
-                        disabled={pendingApproval}
-                        className="px-4 py-3 bg-white border-2 border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all text-sm"
-                      >
-                        ⏮️ Mistake? Revert status
-                      </button>
-                    </div>
+                    {!isObserver && (
+                      <div className="flex gap-3">
+                        <button
+                          onClick={handleScheduleTrial}
+                          disabled={!canEdit || !trialBatchId || updateLeadMutation.isPending || pendingApproval}
+                          className="flex-1 py-3 bg-purple-600 text-white font-bold rounded-xl hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                        >
+                          {updateLeadMutation.isPending ? 'Scheduling...' : '✓ Schedule Trial'}
+                        </button>
+                        <button
+                          onClick={handleRevertStatus}
+                          disabled={pendingApproval}
+                          className="px-4 py-3 bg-white border-2 border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all text-sm"
+                        >
+                          ⏮️ Mistake? Revert status
+                        </button>
+                      </div>
+                    )}
                     {showReversalForm && user?.role !== 'team_lead' && (
                       <div className="mt-4 p-4 bg-gray-50 border border-gray-200 rounded-xl">
                         <label className="block text-xs font-semibold text-gray-700 mb-2">
@@ -1156,22 +1177,24 @@ ${prefUrl}`;
                         )}
                       </div>
 
-                      <div className="flex gap-3">
-                        <button
-                          onClick={handleCompleteJoining}
-                          disabled={!canEdit || !paymentConfirmed || !studentBatchIds.length || !subscriptionPlan || !subscriptionStartDate || updateLeadMutation.isPending || pendingApproval}
-                          className="flex-1 py-4 bg-green-600 text-white font-black rounded-xl hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all text-lg"
-                        >
-                          {updateLeadMutation.isPending ? 'Completing...' : '🎉 Complete Joining'}
-                        </button>
-                        <button
-                          onClick={handleRevertStatus}
-                          disabled={pendingApproval}
-                          className="px-4 py-4 bg-white border-2 border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all text-sm"
-                        >
-                          ⏮️ Mistake? Revert status
-                        </button>
-                      </div>
+                      {!isObserver && (
+                        <div className="flex gap-3">
+                          <button
+                            onClick={handleCompleteJoining}
+                            disabled={!canEdit || !paymentConfirmed || !studentBatchIds.length || !subscriptionPlan || !subscriptionStartDate || updateLeadMutation.isPending || pendingApproval}
+                            className="flex-1 py-4 bg-green-600 text-white font-black rounded-xl hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all text-lg"
+                          >
+                            {updateLeadMutation.isPending ? 'Completing...' : '🎉 Complete Joining'}
+                          </button>
+                          <button
+                            onClick={handleRevertStatus}
+                            disabled={pendingApproval}
+                            className="px-4 py-4 bg-white border-2 border-gray-300 text-gray-700 font-medium rounded-xl hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-all text-sm"
+                          >
+                            ⏮️ Mistake? Revert status
+                          </button>
+                        </div>
+                      )}
                       {showReversalForm && user?.role !== 'team_lead' && (
                         <div className="mt-4 p-4 bg-gray-50 border border-gray-200 rounded-xl">
                           <label className="block text-xs font-semibold text-gray-700 mb-2">
@@ -1346,87 +1369,89 @@ ${prefUrl}`;
                   </div>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <button
-                    onClick={async () => {
-                      if (!lead?.public_token || !lead?.phone) {
-                        toast.error('Missing public token or phone number');
-                        return;
-                      }
-                      
-                      try {
-                        // Increment nudge count
-                        const nudgeResponse = await leadsAPI.sendNudge(lead.id);
+                {!isObserver && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <button
+                      onClick={async () => {
+                        if (!lead?.public_token || !lead?.phone) {
+                          toast.error('Missing public token or phone number');
+                          return;
+                        }
                         
-                        // Generate WhatsApp message with Yes/No links
-                        const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
-                        const prefUrl = `${baseUrl}/pref/${lead.public_token}`;
-                        const feedbackUrl = `${baseUrl}/feedback/${lead.public_token}`;
-                        const playerName = lead.player_name;
-                        
-                        const whatsappMessage = `Hi! We miss ${playerName} at TOFA! Want to get back to the field?
+                        try {
+                          // Increment nudge count
+                          const nudgeResponse = await leadsAPI.sendNudge(lead.id);
+                          
+                          // Generate WhatsApp message with Yes/No links
+                          const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+                          const prefUrl = `${baseUrl}/pref/${lead.public_token}`;
+                          const feedbackUrl = `${baseUrl}/feedback/${lead.public_token}`;
+                          const playerName = lead.player_name;
+                          
+                          const whatsappMessage = `Hi! We miss ${playerName} at TOFA! Want to get back to the field?
 
 ✅ Yes: ${prefUrl}
 ❌ No: ${feedbackUrl}`;
-                        
-                        // Open WhatsApp
-                        const cleanPhone = lead.phone.replace(/\D/g, '');
-                        const encodedMessage = encodeURIComponent(whatsappMessage);
-                        window.open(`https://wa.me/${cleanPhone}?text=${encodedMessage}`, '_blank');
-                        
-                        toast.success(`Re-engagement nudge sent! (${nudgeResponse.nudge_count}/3)`);
-                        
-                        // Refresh lead data
-                        queryClient.invalidateQueries({ queryKey: ['leads'] });
-                        queryClient.invalidateQueries({ queryKey: ['analytics'] });
+                          
+                          // Open WhatsApp
+                          const cleanPhone = lead.phone.replace(/\D/g, '');
+                          const encodedMessage = encodeURIComponent(whatsappMessage);
+                          window.open(`https://wa.me/${cleanPhone}?text=${encodedMessage}`, '_blank');
+                          
+                          toast.success(`Re-engagement nudge sent! (${nudgeResponse.nudge_count}/3)`);
+                          
+                          // Refresh lead data
+                          queryClient.invalidateQueries({ queryKey: ['leads'] });
+                          queryClient.invalidateQueries({ queryKey: ['analytics'] });
+                        } catch (error: any) {
+                          console.error('Error sending nudge:', error);
+                          toast.error(error.response?.data?.detail || 'Failed to send nudge');
+                        }
+                      }}
+                      disabled={!canEdit || (lead.nudge_count !== undefined && lead.nudge_count >= 3)}
+                      className="flex items-center justify-center gap-2 p-3 bg-green-50 border-2 border-green-200 rounded-xl hover:bg-green-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <MessageCircle className="w-5 h-5 text-green-600" />
+                      <span className="font-semibold text-green-800">📱 Send Re-engagement Nudge</span>
+                    </button>
+                    
+                    <button
+                      onClick={async () => {
+                        try {
+                          await updateLeadMutation.mutateAsync({
+                            leadId: lead.id,
+                            update: {
+                              status: 'Called',
+                              comment: 'Lead re-activated from Nurture pipeline',
+                            },
+                          });
+                          
+                          queryClient.invalidateQueries({ queryKey: ['leads'] });
+                        queryClient.invalidateQueries({ queryKey: ['tasks'] });
+                        toast.success('Lead re-activated! Status updated to "Called"');
+                        // Modal will refresh automatically via query invalidation, showing Step 3
                       } catch (error: any) {
-                        console.error('Error sending nudge:', error);
-                        toast.error(error.response?.data?.detail || 'Failed to send nudge');
+                        const errorMessage = error?.response?.data?.detail || error?.message || 'Failed to re-activate lead';
+                        toast.error(`Failed to re-activate: ${errorMessage}`);
                       }
                     }}
-                    disabled={!canEdit || (lead.nudge_count !== undefined && lead.nudge_count >= 3)}
-                    className="flex items-center justify-center gap-2 p-3 bg-green-50 border-2 border-green-200 rounded-xl hover:bg-green-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={!canEdit || updateLeadMutation.isPending}
+                    className="w-full py-4 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 text-lg"
                   >
-                    <MessageCircle className="w-5 h-5 text-green-600" />
-                    <span className="font-semibold text-green-800">📱 Send Re-engagement Nudge</span>
+                    {updateLeadMutation.isPending ? (
+                      <>
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                        Re-activating...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="h-5 w-5" />
+                        🔄 Re-activate Lead
+                      </>
+                    )}
                   </button>
-                  
-                  <button
-                    onClick={async () => {
-                      try {
-                        await updateLeadMutation.mutateAsync({
-                          leadId: lead.id,
-                          update: {
-                            status: 'Called',
-                            comment: 'Lead re-activated from Nurture pipeline',
-                          },
-                        });
-                        
-                        queryClient.invalidateQueries({ queryKey: ['leads'] });
-                      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-                      toast.success('Lead re-activated! Status updated to "Called"');
-                      // Modal will refresh automatically via query invalidation, showing Step 3
-                    } catch (error: any) {
-                      const errorMessage = error?.response?.data?.detail || error?.message || 'Failed to re-activate lead';
-                      toast.error(`Failed to re-activate: ${errorMessage}`);
-                    }
-                  }}
-                  disabled={!canEdit || updateLeadMutation.isPending}
-                  className="w-full py-4 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2 text-lg"
-                >
-                  {updateLeadMutation.isPending ? (
-                    <>
-                      <Loader2 className="h-5 w-5 animate-spin" />
-                      Re-activating...
-                    </>
-                  ) : (
-                    <>
-                      <RefreshCw className="h-5 w-5" />
-                      🔄 Re-activate Lead
-                    </>
-                  )}
-                </button>
-                </div>
+                  </div>
+                )}
                 <p className="text-xs text-yellow-600 mt-3 text-center">
                   Re-activating will change status to "Called" and you'll see Step 3 (Schedule Trial) immediately
                 </p>
@@ -2080,7 +2105,7 @@ ${prefUrl}`;
                     </button>
 
                     {/* Send Renewal Link */}
-                    {lead.public_token && !studentRecord?.in_grace_period && (
+                    {!isObserver && lead.public_token && !studentRecord?.in_grace_period && (
                       <button
                         onClick={() => {
                           if (!lead.phone) {

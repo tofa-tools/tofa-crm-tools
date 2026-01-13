@@ -121,7 +121,8 @@ export default function CentersPage() {
           <p className="text-gray-600 mt-2">Create and manage academy centers</p>
         </div>
 
-        {/* Create/Edit Center Form */}
+        {/* Create/Edit Center Form - Hidden for observers */}
+        {user?.role !== 'observer' && (
         <div ref={formRef} className="bg-white rounded-lg shadow-md p-6">
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-semibold text-gray-900">
@@ -218,6 +219,7 @@ export default function CentersPage() {
             </form>
           )}
         </div>
+        )}
 
         {/* Existing Centers Table */}
         <div className="bg-white rounded-lg shadow-md p-6">

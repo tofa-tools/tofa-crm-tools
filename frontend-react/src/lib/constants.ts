@@ -6,6 +6,6 @@ export const LEAD_STATUSES = [
   'Dead/Not Interested',
 ] as const;
 
-export const USER_ROLES = ['team_member', 'team_lead', 'observer'] as const;
+export const USER_ROLES = ['team_lead', 'team_member', 'coach', 'observer'] as const;
 
 

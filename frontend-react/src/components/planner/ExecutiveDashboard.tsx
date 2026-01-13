@@ -6,6 +6,7 @@ import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { subscriptionsAPI, approvalsAPI } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
 import toast from 'react-hot-toast';
+import { ArrowUp, ArrowDown, Minus, MessageCircle, TrendingUp, TrendingDown } from 'lucide-react';
 
 interface ExecutiveData {
   attendance_leaderboard: Array<{
@@ -14,6 +15,8 @@ interface ExecutiveData {
     average_attendance_pct: number;
     total_attendance: number;
     expected_attendance: number;
+    previous_week_pct?: number;
+    trend?: 'up' | 'down' | 'stable';
   }>;
   batch_utilization: Array<{
     batch_id: number;
@@ -30,6 +33,11 @@ interface ExecutiveData {
     center_name: string;
     date: string;
     expected_students: number;
+    coaches?: Array<{
+      coach_id: number;
+      coach_name: string;
+      coach_phone?: string | null;
+    }>;
   }>;
   loss_analysis?: Array<{
     reason: string;
@@ -44,6 +52,11 @@ interface ExecutiveData {
   total_dead_leads?: number;
   orphaned_leads_count?: number;
   orphaned_batches_count?: number;
+  orphaned_batches?: Array<{
+    batch_id: number;
+    batch_name: string;
+    center_name: string;
+  }>;
   top_closers?: Array<{
     user_id: number;
     user_name: string;
@@ -74,6 +87,11 @@ export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
   const { user } = useAuth();
   const [isRunningExpiryCheck, setIsRunningExpiryCheck] = useState(false);
 
+  // Restrict access to team_lead only
+  if (user?.role !== 'team_lead') {
+    return null;
+  }
+
   // Fetch pending approvals count (team leads only)
   const { data: pendingApprovalsData } = useQuery({
     queryKey: ['approvals', 'pending'],
@@ -91,7 +109,7 @@ export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
       </div>
     );
   }
-  
+
   const handleSyncSubscriptions = async () => {
     setIsRunningExpiryCheck(true);
     try {
@@ -105,7 +123,7 @@ export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
       setIsRunningExpiryCheck(false);
     }
   };
-  
+
   const handleLossReasonClick = (reason: string) => {
     // Navigate to Leads Management page with status filter for Dead/Not Interested and loss_reason filter
     const params = new URLSearchParams();
@@ -115,15 +133,32 @@ export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
   };
 
   const handleOrphanedLeadsClick = () => {
-    // Navigate to Leads page with filter for center_id=null
-    // Since backend doesn't support center_id=null filter directly, we'll use a special approach
-    // For now, navigate to leads page - the user can manually filter
     router.push('/leads?status=New,Called');
   };
   
   const handleOrphanedBatchesClick = () => {
-    // Navigate to Batches management page
     router.push('/batches');
+  };
+
+  // Calculate Data Quality Score
+  const totalDataPoints = (executiveData.orphaned_leads_count || 0) + (executiveData.orphaned_batches_count || 0);
+  const dataQualityScore = totalDataPoints === 0 ? 100 : Math.max(0, 100 - (totalDataPoints * 2)); // Simple scoring: -2 points per issue
+
+  // WhatsApp message handler
+  const handleWhatsAppCoach = (coachName: string, batchName: string, coachPhone?: string | null) => {
+    const message = `Hi ${coachName}, our records show the ${batchName} session hasn't had attendance marked. Please update the system!`;
+    const encodedMessage = encodeURIComponent(message);
+    
+    if (coachPhone) {
+      // Remove any non-digit characters and add country code if needed
+      const cleanPhone = coachPhone.replace(/\D/g, '');
+      const whatsappUrl = `https://wa.me/${cleanPhone}?text=${encodedMessage}`;
+      window.open(whatsappUrl, '_blank');
+    } else {
+      // If no phone, just copy message to clipboard
+      navigator.clipboard.writeText(message);
+      toast.success('Message copied to clipboard!');
+    }
   };
 
   return (
@@ -153,17 +188,17 @@ export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
         </div>
       )}
 
-      {/* Data Health Alerts */}
-      <div className="bg-white rounded-lg shadow p-6 border-l-4 border-red-500">
-        <div className="flex items-center justify-between mb-4">
+      {/* Data Health Alerts - Emergency Banner Style */}
+      <div className="bg-gradient-to-r from-slate-950 to-indigo-950 rounded-2xl shadow-2xl border-4 border-yellow-500/30 p-6">
+        <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-xl font-bold text-gray-900">🚨 Data Health Alerts</h2>
-            <p className="text-sm text-gray-600 mt-1">Monitor and maintain data quality</p>
+            <h2 className="text-2xl font-black text-yellow-500 uppercase tracking-tight mb-2">🚨 Data Health Intelligence</h2>
+            <p className="text-sm text-gray-300">Monitor and maintain data quality across all centers</p>
           </div>
           <button
             onClick={handleSyncSubscriptions}
             disabled={isRunningExpiryCheck}
-            className="px-4 py-2 bg-white border-2 border-purple-500 text-purple-600 hover:bg-purple-50 font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="px-4 py-2 bg-yellow-500/20 border-2 border-yellow-500/50 text-yellow-400 hover:bg-yellow-500/30 font-bold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 uppercase tracking-wide text-sm"
           >
             {isRunningExpiryCheck ? (
               <>
@@ -177,88 +212,203 @@ export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
             )}
           </button>
         </div>
-        {((executiveData.orphaned_leads_count && executiveData.orphaned_leads_count > 0) || 
-          (executiveData.orphaned_batches_count && executiveData.orphaned_batches_count > 0)) && (
-          <>
-            <p className="text-sm text-gray-600 mb-4">Found orphaned data that needs attention</p>
-          <div className="space-y-3">
-            {executiveData.orphaned_leads_count && executiveData.orphaned_leads_count > 0 && (
-              <div 
-                className="p-4 bg-red-50 border border-red-200 rounded-lg cursor-pointer hover:bg-red-100 transition-colors"
-                onClick={handleOrphanedLeadsClick}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">⚠️</span>
-                    <div>
-                      <p className="font-semibold text-red-900">
-                        Leads with no Center assigned
-                      </p>
-                      <p className="text-sm text-red-700 mt-1">
-                        {executiveData.orphaned_leads_count} lead{executiveData.orphaned_leads_count !== 1 ? 's' : ''} with status 'New' or 'Called' have no center assigned
-                      </p>
-                    </div>
-                  </div>
-                  <span className="text-lg font-bold text-red-600">
-                    {executiveData.orphaned_leads_count}
-                  </span>
-                </div>
-                <p className="text-xs text-red-600 mt-2 italic">Click to view and assign centers</p>
+
+        {/* Data Quality Score Card */}
+        <div className="bg-white/10 backdrop-blur-sm rounded-xl p-6 border-2 border-yellow-500/30 mb-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-black text-gray-300 uppercase tracking-wider mb-2">Data Quality Score</h3>
+              <div className="flex items-baseline gap-3">
+                <span className={`text-5xl font-black ${
+                  dataQualityScore >= 95 ? 'text-emerald-400' :
+                  dataQualityScore >= 80 ? 'text-yellow-400' :
+                  'text-red-400'
+                }`}>
+                  {dataQualityScore}%
+                </span>
+                <span className="text-sm text-gray-400 font-medium">
+                  {dataQualityScore >= 95 ? 'Excellent' :
+                   dataQualityScore >= 80 ? 'Good' :
+                   'Needs Attention'}
+                </span>
               </div>
-            )}
-            {executiveData.orphaned_batches_count && executiveData.orphaned_batches_count > 0 && (
-              <div 
-                className="p-4 bg-red-50 border border-red-200 rounded-lg cursor-pointer hover:bg-red-100 transition-colors"
-                onClick={handleOrphanedBatchesClick}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">⚠️</span>
-                    <div>
-                      <p className="font-semibold text-red-900">
-                        Batches with no Coach assigned
-                      </p>
-                      <p className="text-sm text-red-700 mt-1">
-                        {executiveData.orphaned_batches_count} batch{executiveData.orphaned_batches_count !== 1 ? 'es' : ''} have no coaches assigned
-                      </p>
-                    </div>
-                  </div>
-                  <span className="text-lg font-bold text-red-600">
-                    {executiveData.orphaned_batches_count}
-                  </span>
-                </div>
-                <p className="text-xs text-red-600 mt-2 italic">Click to view and assign coaches</p>
-              </div>
-            )}
+            </div>
+            <div className="w-32 h-32 relative">
+              <svg className="transform -rotate-90 w-32 h-32">
+                <circle
+                  cx="64"
+                  cy="64"
+                  r="56"
+                  stroke="currentColor"
+                  strokeWidth="8"
+                  fill="none"
+                  className="text-gray-700"
+                />
+                <circle
+                  cx="64"
+                  cy="64"
+                  r="56"
+                  stroke="currentColor"
+                  strokeWidth="8"
+                  fill="none"
+                  strokeDasharray={`${2 * Math.PI * 56}`}
+                  strokeDashoffset={`${2 * Math.PI * 56 * (1 - dataQualityScore / 100)}`}
+                  className={
+                    dataQualityScore >= 95 ? 'text-emerald-400' :
+                    dataQualityScore >= 80 ? 'text-yellow-400' :
+                    'text-red-400'
+                  }
+                  strokeLinecap="round"
+                />
+              </svg>
+            </div>
           </div>
-          </>
-        )}
+
+          {/* Orphaned Data Issues - Scrollable - Only show if score < 100% */}
+          {dataQualityScore < 100 && ((executiveData.orphaned_leads_count ?? 0) > 0 || 
+            (executiveData.orphaned_batches_count ?? 0) > 0) && (
+            <div className="mt-4 max-h-48 overflow-y-auto space-y-2 px-4">
+              {(executiveData.orphaned_leads_count ?? 0) > 0 && (
+                <div 
+                  className="p-4 bg-red-500/20 border border-red-500/50 rounded-lg cursor-pointer hover:bg-red-500/30 transition-colors"
+                  onClick={handleOrphanedLeadsClick}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">⚠️</span>
+                      <div>
+                        <p className="font-semibold text-red-300 text-sm">
+                          Leads with no Center assigned
+                        </p>
+                        <p className="text-xs text-red-200 mt-0.5">
+                          {executiveData.orphaned_leads_count} lead{executiveData.orphaned_leads_count !== 1 ? 's' : ''} need center assignment
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-lg font-bold text-red-400">
+                      {executiveData.orphaned_leads_count}
+                    </span>
+                  </div>
+                </div>
+              )}
+              {(executiveData.orphaned_batches_count ?? 0) > 0 && (
+                <div 
+                  className="p-4 bg-red-500/20 border border-red-500/50 rounded-lg cursor-pointer hover:bg-red-500/30 transition-colors"
+                  onClick={handleOrphanedBatchesClick}
+                >
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">⚠️</span>
+                      <div>
+                        <p className="font-semibold text-red-300 text-sm">
+                          Batches with no Coach assigned
+                        </p>
+                        <p className="text-xs text-red-200 mt-0.5">
+                          {executiveData.orphaned_batches_count} batch{executiveData.orphaned_batches_count !== 1 ? 'es' : ''} need coach assignment
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-lg font-bold text-red-400">
+                      {executiveData.orphaned_batches_count}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
       
-      {/* This Month's Performance */}
-      {(executiveData.top_closers || executiveData.speed_demons || executiveData.coach_compliance_list) && (
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-xl font-bold text-gray-900 mb-6">📊 This Month's Performance</h2>
-          
-          {/* Sales All-Stars Section */}
-          {(executiveData.top_closers || executiveData.speed_demons) && (
-            <div className="mb-8">
-              <h3 className="text-lg font-semibold text-gray-800 mb-4">Sales All-Stars</h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      {/* Two-Column Grid Layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Left Column: Attendance Leaderboard + Sales All-Stars */}
+        <div className="space-y-6">
+          {/* Attendance Leaderboard */}
+          <div className="bg-gradient-to-br from-slate-950 to-indigo-950 rounded-2xl shadow-2xl border-2 border-yellow-500/30 p-6">
+            <h2 className="text-xl font-black text-yellow-500 uppercase tracking-tight mb-4 flex items-center gap-2">
+              <TrendingUp className="h-[18px] w-[18px] text-yellow-500" />
+              Attendance Leaderboard
+            </h2>
+            <p className="text-sm text-gray-300 mb-4">Average attendance % for last 7 days by center</p>
+            <div className="space-y-3">
+              {executiveData.attendance_leaderboard.length === 0 ? (
+                <p className="text-gray-400 text-center py-4">No attendance data available</p>
+              ) : (
+                executiveData.attendance_leaderboard.map((center) => (
+                  <div key={center.center_id} className="bg-white/10 backdrop-blur-sm rounded-lg p-4 border border-yellow-500/20">
+                    <div className="flex justify-between items-center mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-white">{center.center_name}</span>
+                        {center.trend && center.trend !== 'stable' && (
+                          <span className="flex items-center gap-1">
+                            {center.trend === 'up' && (
+                              <ArrowUp className="h-[18px] w-[18px] text-emerald-400" />
+                            )}
+                            {center.trend === 'down' && (
+                              <ArrowDown className="h-[18px] w-[18px] text-red-400" />
+                            )}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-right ml-4">
+                        <span className={`text-lg font-black ${
+                          center.average_attendance_pct >= 80 ? 'text-emerald-400' :
+                          center.average_attendance_pct >= 60 ? 'text-yellow-400' :
+                          'text-red-400'
+                        }`}>
+                          {center.average_attendance_pct.toFixed(1)}%
+                        </span>
+                        {center.previous_week_pct !== undefined && center.previous_week_pct > 0 && (
+                          <p className="text-xs text-gray-400">
+                            Last week: {center.previous_week_pct.toFixed(1)}%
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="w-full bg-gray-700 rounded-full h-3 mb-2">
+                      <div
+                        className={`h-3 rounded-full transition-all ${
+                          center.average_attendance_pct >= 80 ? 'bg-emerald-400' :
+                          center.average_attendance_pct >= 60 ? 'bg-yellow-400' :
+                          'bg-red-400'
+                        }`}
+                        style={{ width: `${Math.min(center.average_attendance_pct, 100)}%` }}
+                      ></div>
+                    </div>
+                    <p className="text-xs text-gray-400">
+                      {center.total_attendance} / {center.expected_attendance} present
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Sales All-Stars */}
+          <div className="bg-gradient-to-br from-slate-950 to-indigo-950 rounded-2xl shadow-2xl border-2 border-yellow-500/30 p-6">
+            <h2 className="text-xl font-black text-yellow-500 uppercase tracking-tight mb-4 flex items-center gap-2">
+              <span>⭐</span>
+              Sales All-Stars
+            </h2>
+            {(!executiveData.top_closers || executiveData.top_closers.length === 0) && 
+             (!executiveData.speed_demons || executiveData.speed_demons.length === 0) ? (
+              <p className="text-gray-400 text-center py-6">No closing activity recorded for this month yet.</p>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {/* Top Closers */}
                 {executiveData.top_closers && executiveData.top_closers.length > 0 && (
-                  <div className="border rounded-lg p-4 bg-gradient-to-br from-yellow-50 to-orange-50">
-                    <h4 className="text-md font-semibold text-gray-900 mb-3">🏆 Top Closers</h4>
-                    <div className="space-y-3">
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-yellow-500/20 shadow-yellow-500/20 shadow-lg">
+                    <h4 className="text-md font-black text-yellow-400 uppercase tracking-wide mb-3">🏆 Top Closers</h4>
+                    <div className="space-y-2">
                       {executiveData.top_closers.map((closer, index) => {
                         const medals = ['🥇', '🥈', '🥉'];
                         return (
-                          <div key={closer.user_id} className="flex items-center justify-between p-3 bg-white rounded-lg border border-yellow-200">
+                          <div key={closer.user_id} className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-yellow-500/10">
                             <div className="flex items-center gap-3">
                               <span className="text-2xl">{medals[index] || `${index + 1}.`}</span>
                               <div>
-                                <p className="font-semibold text-gray-900">{closer.user_name}</p>
-                                <p className="text-sm text-gray-600">{closer.joined_count} Join{closer.joined_count !== 1 ? 's' : ''}</p>
+                                <p className="font-bold text-white text-sm">{closer.user_name}</p>
+                                <p className="text-xs text-gray-300">{closer.joined_count} Join{closer.joined_count !== 1 ? 's' : ''}</p>
                               </div>
                             </div>
                           </div>
@@ -270,18 +420,18 @@ export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
                 
                 {/* Speed Demons */}
                 {executiveData.speed_demons && executiveData.speed_demons.length > 0 && (
-                  <div className="border rounded-lg p-4 bg-gradient-to-br from-blue-50 to-indigo-50">
-                    <h4 className="text-md font-semibold text-gray-900 mb-3">⚡ Speed Demons</h4>
-                    <div className="space-y-3">
+                  <div className="bg-white/10 backdrop-blur-sm rounded-xl p-4 border border-yellow-500/20 shadow-yellow-500/20 shadow-lg">
+                    <h4 className="text-md font-black text-yellow-400 uppercase tracking-wide mb-3">⚡ Speed Demons</h4>
+                    <div className="space-y-2">
                       {executiveData.speed_demons.map((demon, index) => {
                         const medals = ['🥇', '🥈', '🥉'];
                         return (
-                          <div key={demon.user_id} className="flex items-center justify-between p-3 bg-white rounded-lg border border-blue-200">
+                          <div key={demon.user_id} className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-yellow-500/10">
                             <div className="flex items-center gap-3">
                               <span className="text-2xl">{medals[index] || `${index + 1}.`}</span>
                               <div>
-                                <p className="font-semibold text-gray-900">{demon.user_name}</p>
-                                <p className="text-sm text-gray-600">{demon.avg_minutes}m avg contact</p>
+                                <p className="font-bold text-white text-sm">{demon.user_name}</p>
+                                <p className="text-xs text-gray-300">{demon.avg_minutes}m avg contact</p>
                               </div>
                             </div>
                           </div>
@@ -291,165 +441,143 @@ export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
                   </div>
                 )}
               </div>
-            </div>
-          )}
-          
-          {/* Coaching Excellence Section */}
-          {executiveData.coach_compliance_list && executiveData.coach_compliance_list.length > 0 && (
-            <div>
-              <h3 className="text-lg font-semibold text-gray-800 mb-4">Coaching Excellence</h3>
-              <div className="space-y-4">
-                {executiveData.coach_compliance_list.map((coach) => (
-                  <div key={coach.coach_id} className="border rounded-lg p-4 bg-gray-50">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-3">
-                        <span className="font-semibold text-gray-900">{coach.coach_name}</span>
-                        {coach.compliance_pct < 70 && (
-                          <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-red-100 text-red-800">
-                            ⚠️ Needs Follow-up
-                          </span>
-                        )}
+            )}
+          </div>
+        </div>
+
+        {/* Right Column: Batch Utilization + Coach Compliance */}
+        <div className="space-y-6">
+          {/* Batch Utilization */}
+          <div className="bg-gradient-to-br from-slate-950 to-indigo-950 rounded-2xl shadow-2xl border-2 border-yellow-500/30 p-6">
+            <h2 className="text-xl font-black text-yellow-500 uppercase tracking-tight mb-4 flex items-center gap-2">
+              <span>⚖️</span>
+              Batch Utilization Alerts
+            </h2>
+            <p className="text-sm text-gray-300 mb-4">Batches with utilization &gt;90% (overcrowded) or &lt;30% (empty)</p>
+            <div className="space-y-3">
+              {executiveData.batch_utilization.length === 0 ? (
+                <p className="text-emerald-400 text-center py-4 font-semibold">✅ All batches are optimally utilized</p>
+              ) : (
+                executiveData.batch_utilization.map((batch) => {
+                  const isCritical = batch.utilization_pct < 30;
+                  const isElite = batch.utilization_pct > 90;
+                  const label = isCritical ? '🔴 CRITICAL: Underutilized' : isElite ? '👑 ELITE: At Capacity' : '';
+                  
+                  return (
+                    <div
+                      key={batch.batch_id}
+                      className={`border-l-4 rounded-lg p-4 bg-white/10 backdrop-blur-sm border ${
+                        batch.status === 'overcrowded'
+                          ? 'border-l-emerald-500 border-emerald-500/20'
+                          : 'border-l-red-500 border-red-500/20'
+                      }`}
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <span className="font-bold text-white">{batch.batch_name}</span>
+                          <span className="text-sm text-gray-300 ml-2">({batch.center_name})</span>
+                          {label && (
+                            <div className="mt-1">
+                              <span className={`text-xs font-black uppercase tracking-wide ${
+                                isCritical ? 'text-red-400' : 'text-emerald-400'
+                              }`}>
+                                {label}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                        <span
+                          className={`text-lg font-black ${
+                            batch.status === 'overcrowded' ? 'text-emerald-400' : 'text-red-400'
+                          }`}
+                        >
+                          {batch.utilization_pct.toFixed(1)}%
+                        </span>
                       </div>
-                      <span className={`text-lg font-bold ${
-                        coach.compliance_pct >= 90 ? 'text-green-600' : 
-                        coach.compliance_pct < 70 ? 'text-red-600' : 'text-yellow-600'
-                      }`}>
-                        {coach.compliance_pct.toFixed(1)}%
-                      </span>
+                      <div className="w-full bg-gray-700 rounded-full h-2 mb-2">
+                        <div
+                          className={`h-2 rounded-full ${
+                            batch.status === 'overcrowded' ? 'bg-emerald-400' : 'bg-red-400'
+                          }`}
+                          style={{ width: `${Math.min(batch.utilization_pct, 100)}%` }}
+                        ></div>
+                      </div>
+                      <p className="text-xs text-gray-300">
+                        {batch.current_students} / {batch.max_capacity} students
+                        {isCritical && (
+                          <span className="text-red-400 font-semibold ml-2">💡 Suggests running ads</span>
+                        )}
+                        {isElite && (
+                          <span className="text-emerald-400 font-semibold ml-2">💡 Suggests opening a new batch</span>
+                        )}
+                      </p>
                     </div>
-                    <div className="w-full bg-gray-200 rounded-full h-3 mb-2">
-                      <div
-                        className={`h-3 rounded-full transition-all ${
-                          coach.compliance_pct >= 90 ? 'bg-green-600' : 
-                          coach.compliance_pct < 70 ? 'bg-red-600' : 'bg-yellow-600'
-                        }`}
-                        style={{ width: `${Math.min(coach.compliance_pct, 100)}%` }}
-                      ></div>
-                    </div>
-                    <p className="text-xs text-gray-600">
-                      {coach.sessions_with_attendance} / {coach.total_scheduled} sessions recorded
-                    </p>
-                  </div>
-                ))}
-              </div>
+                  );
+                })
+              )}
             </div>
-          )}
-        </div>
-      )}
-      
-      {/* Attendance Leaderboard */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-bold text-gray-900 mb-4">📊 Attendance Leaderboard</h2>
-        <p className="text-sm text-gray-600 mb-4">Average attendance % for last 7 days by center</p>
-        <div className="space-y-3">
-          {executiveData.attendance_leaderboard.length === 0 ? (
-            <p className="text-gray-500 text-center py-4">No attendance data available</p>
-          ) : (
-            executiveData.attendance_leaderboard.map((center) => (
-              <div key={center.center_id} className="border rounded-lg p-4">
-                <div className="flex justify-between items-center mb-2">
-                  <span className="font-semibold text-gray-900">{center.center_name}</span>
-                  <span className="text-lg font-bold text-blue-600">
-                    {center.average_attendance_pct.toFixed(1)}%
-                  </span>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-2.5">
+          </div>
+
+          {/* Coach Compliance */}
+          <div className="bg-gradient-to-br from-slate-950 to-indigo-950 rounded-2xl shadow-2xl border-2 border-yellow-500/30 p-6">
+            <h2 className="text-xl font-black text-yellow-500 uppercase tracking-tight mb-4 flex items-center gap-2">
+              <span>✅</span>
+              Coach Compliance
+            </h2>
+            <p className="text-sm text-gray-300 mb-4">Batches that happened in last 24h but have no attendance records</p>
+            <div className="space-y-3">
+              {executiveData.coach_compliance.length === 0 ? (
+                <p className="text-emerald-300 text-center py-6 font-medium">✅ All batches have attendance records</p>
+              ) : (
+                executiveData.coach_compliance.map((batch, index) => (
                   <div
-                    className="bg-blue-600 h-2.5 rounded-full transition-all"
-                    style={{ width: `${Math.min(center.average_attendance_pct, 100)}%` }}
-                  ></div>
-                </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  {center.total_attendance} / {center.expected_attendance} present
-                </p>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* Batch Utilization */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-bold text-gray-900 mb-4">⚖️ Batch Utilization Alerts</h2>
-        <p className="text-sm text-gray-600 mb-4">Batches with utilization &gt;90% (overcrowded) or &lt;30% (empty)</p>
-        <div className="space-y-3">
-          {executiveData.batch_utilization.length === 0 ? (
-            <p className="text-green-600 text-center py-4">✅ All batches are optimally utilized</p>
-          ) : (
-            executiveData.batch_utilization.map((batch) => (
-              <div
-                key={batch.batch_id}
-                className={`border-l-4 rounded-lg p-4 ${
-                  batch.status === 'overcrowded'
-                    ? 'border-red-500 bg-red-50'
-                    : 'border-yellow-500 bg-yellow-50'
-                }`}
-              >
-                <div className="flex justify-between items-start">
-                  <div>
-                    <span className="font-semibold text-gray-900">{batch.batch_name}</span>
-                    <span className="text-sm text-gray-600 ml-2">({batch.center_name})</span>
-                  </div>
-                  <span
-                    className={`text-lg font-bold ${
-                      batch.status === 'overcrowded' ? 'text-red-600' : 'text-yellow-600'
-                    }`}
+                    key={`${batch.batch_id}-${batch.date}-${index}`}
+                    className="border-l-4 border-red-500 bg-white/10 backdrop-blur-sm rounded-lg p-4 border border-red-500/20"
                   >
-                    {batch.utilization_pct.toFixed(1)}%
-                  </span>
-                </div>
-                <p className="text-sm text-gray-600 mt-1">
-                  {batch.current_students} / {batch.max_capacity} students
-                  {batch.status === 'overcrowded' && (
-                    <span className="text-red-600 font-semibold ml-2">⚠️ Overcrowded</span>
-                  )}
-                  {batch.status === 'empty' && (
-                    <span className="text-yellow-600 font-semibold ml-2">📉 Low Capacity</span>
-                  )}
-                </p>
-              </div>
-            ))
-          )}
-        </div>
-      </div>
-
-      {/* Coach Compliance */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-bold text-gray-900 mb-4">✅ Coach Compliance</h2>
-        <p className="text-sm text-gray-600 mb-4">Batches that happened in last 24h but have no attendance records</p>
-        <div className="space-y-3">
-          {executiveData.coach_compliance.length === 0 ? (
-            <p className="text-green-600 text-center py-4">✅ All batches have attendance records</p>
-          ) : (
-            executiveData.coach_compliance.map((batch, index) => (
-              <div
-                key={`${batch.batch_id}-${batch.date}-${index}`}
-                className="border-l-4 border-red-500 bg-red-50 rounded-lg p-4"
-              >
-                <div className="flex justify-between items-start">
-                  <div>
-                    <span className="font-semibold text-gray-900">{batch.batch_name}</span>
-                    <span className="text-sm text-gray-600 ml-2">({batch.center_name})</span>
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <span className="font-bold text-white">{batch.batch_name}</span>
+                        <span className="text-sm text-gray-300 ml-2">({batch.center_name})</span>
+                      </div>
+                      <span className="text-sm text-red-400 font-bold">⚠️ Missing</span>
+                    </div>
+                    <p className="text-xs text-gray-300 mb-3">
+                      Date: {new Date(batch.date).toLocaleDateString()} • Expected: {batch.expected_students} students
+                    </p>
+                    {/* WhatsApp Coach Buttons */}
+                    {batch.coaches && batch.coaches.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {batch.coaches.map((coach) => (
+                          <button
+                            key={coach.coach_id}
+                            onClick={() => handleWhatsAppCoach(coach.coach_name, batch.batch_name, coach.coach_phone)}
+                            className="flex items-center gap-2 px-3 py-1.5 bg-emerald-500/20 border border-emerald-500/50 text-emerald-300 hover:bg-emerald-500/30 rounded-lg transition-colors text-xs font-bold uppercase tracking-wide"
+                          >
+                            <MessageCircle className="h-[18px] w-[18px] text-emerald-300" />
+                            WhatsApp {coach.coach_name.split(' ')[0]}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                  <span className="text-sm text-red-600 font-semibold">⚠️ Missing</span>
-                </div>
-                <p className="text-sm text-gray-600 mt-1">
-                  Date: {new Date(batch.date).toLocaleDateString()} • Expected: {batch.expected_students} students
-                </p>
-              </div>
-            ))
-          )}
+                ))
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Loss Analysis */}
+      {/* Loss Analysis - Full Width */}
       {executiveData.loss_analysis && executiveData.loss_analysis.length > 0 && (
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-xl font-bold text-gray-900 mb-4">📉 Loss Analysis</h2>
-          <p className="text-sm text-gray-600 mb-4">
+        <div className="bg-gradient-to-br from-slate-950 to-indigo-950 rounded-2xl shadow-2xl border-2 border-yellow-500/30 p-6">
+          <h2 className="text-xl font-black text-yellow-500 uppercase tracking-tight mb-4 flex items-center gap-2">
+            <TrendingDown className="h-[18px] w-[18px] text-yellow-500" />
+            Loss Analysis
+          </h2>
+          <p className="text-sm text-gray-300 mb-4">
             Breakdown of why leads are marked as Dead/Not Interested
             {executiveData.total_dead_leads && (
-              <span className="ml-2 text-gray-500">
+              <span className="ml-2 text-gray-400">
                 (Total: {executiveData.total_dead_leads} leads)
               </span>
             )}
@@ -457,14 +585,14 @@ export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
           
           {/* Top Loss Reason Warning */}
           {executiveData.top_loss_reason && executiveData.top_loss_reason.percentage >= 30 && (
-            <div className="mb-4 p-4 bg-red-50 border-l-4 border-red-500 rounded-lg">
+            <div className="mb-4 p-4 bg-red-500/20 border-l-4 border-red-500 rounded-lg">
               <div className="flex items-start">
                 <span className="text-2xl mr-3">⚠️</span>
                 <div>
-                  <p className="font-semibold text-red-900">
+                  <p className="font-bold text-red-300">
                     Warning: {executiveData.top_loss_reason.percentage}% of losses are due to "{executiveData.top_loss_reason.reason}"
                   </p>
-                  <p className="text-sm text-red-700 mt-1">
+                  <p className="text-sm text-red-200 mt-1">
                     This indicates a potential systemic issue. Consider reviewing your processes for this area.
                   </p>
                 </div>
@@ -477,22 +605,22 @@ export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
             {executiveData.loss_analysis.map((item, index) => (
               <div 
                 key={item.reason || `unknown-${index}`} 
-                className="border rounded-lg p-4 cursor-pointer hover:bg-gray-50 hover:border-blue-300 transition-all"
+                className="border border-yellow-500/20 rounded-lg p-4 cursor-pointer hover:bg-white/5 hover:border-yellow-500/50 transition-all bg-white/5"
                 onClick={() => handleLossReasonClick(item.reason || 'Unknown')}
                 title={`Click to view all leads with loss reason: ${item.reason || 'Unknown'}`}
               >
                 <div className="flex justify-between items-center mb-2">
-                  <span className="font-semibold text-gray-900 hover:text-blue-600">
+                  <span className="font-bold text-white hover:text-yellow-400">
                     {item.reason || 'Unknown'}
                   </span>
                   <div className="text-right">
-                    <span className="text-lg font-bold text-gray-900">{item.count}</span>
-                    <span className="text-sm text-gray-600 ml-2">({item.percentage}%)</span>
+                    <span className="text-lg font-black text-white">{item.count}</span>
+                    <span className="text-sm text-gray-300 ml-2">({item.percentage}%)</span>
                   </div>
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-2.5">
+                <div className="w-full bg-gray-700 rounded-full h-2.5">
                   <div
-                    className="bg-red-600 h-2.5 rounded-full transition-all hover:bg-red-700"
+                    className="bg-red-500 h-2.5 rounded-full transition-all hover:bg-red-400"
                     style={{ width: `${Math.min(item.percentage, 100)}%` }}
                   ></div>
                 </div>
@@ -504,4 +632,3 @@ export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
     </div>
   );
 }
-

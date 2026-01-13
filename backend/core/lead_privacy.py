@@ -63,7 +63,7 @@ def serialize_leads_for_user(leads: List[Lead], user_role: str) -> List[Dict[str
     
     Args:
         leads: List of Lead models
-        user_role: User role ('team_lead', 'regular_user', 'coach')
+        user_role: User role ('team_lead', 'team_member', 'coach', 'observer')
         
     Returns:
         List of dictionaries suitable for JSON serialization
@@ -88,7 +88,7 @@ def serialize_leads_for_user(leads: List[Lead], user_role: str) -> List[Dict[str
     if user_role == "coach":
         return [mask_lead_for_coach(lead) for lead in leads]
     else:
-        # For team_lead and regular_user, return full data
+        # For team_lead and team_member, return full data
         return [
             {
                 "id": lead.id,

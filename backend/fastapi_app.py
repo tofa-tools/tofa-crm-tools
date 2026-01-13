@@ -2,9 +2,10 @@
 FastAPI application using core business logic.
 All routes delegate to framework-agnostic core functions.
 """
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, status, Body
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, status, Body, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlmodel import Session, select
 from typing import List, Optional, Dict
 import pandas as pd
@@ -115,6 +116,47 @@ async def get_current_user(
     return user
 
 app = FastAPI()
+
+# Middleware to block observers from mutation operations
+@app.middleware("http")
+async def observer_read_only_middleware(request: Request, call_next):
+    """
+    Middleware to block observers from POST, PUT, DELETE, PATCH requests.
+    Observers have read-only access.
+    """
+    # Skip check for non-mutation methods
+    if request.method in ["GET", "OPTIONS", "HEAD"]:
+        return await call_next(request)
+    
+    # Check if user is authenticated and is an observer
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        try:
+            from backend.core.auth import get_user_email_from_token
+            from backend.core.users import get_user_by_email
+            from backend.database import get_session
+            
+            email = get_user_email_from_token(token)
+            if email:
+                db = next(get_session())
+                try:
+                    user = get_user_by_email(db, email)
+                    if user and user.role == "observer":
+                        return JSONResponse(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            content={"detail": "Observers have read-only access"}
+                        )
+                finally:
+                    db.close()
+        except HTTPException:
+            # Re-raise HTTP exceptions
+            raise
+        except Exception:
+            # If token validation fails, let the endpoint handle it
+            pass
+    
+    return await call_next(request)
 
 # CORS middleware - Allow React app to make requests
 app.add_middleware(
@@ -1552,7 +1594,7 @@ async def get_staging_leads_endpoint(
     Query Parameters:
         center_id: Optional center ID to filter by
     """
-    if current_user.role not in ["team_lead", "regular_user"]:
+    if current_user.role not in ["team_lead", "team_member"]:
         raise HTTPException(status_code=403, detail="Only Admin/Sales can view staging leads")
     
     staging_leads = get_staging_leads(db=db, center_id=center_id)
@@ -1576,7 +1618,7 @@ async def promote_staging_lead_endpoint(
         address: Optional address
         player_age_category: Optional age category (e.g., 'U9', 'U11')
     """
-    if current_user.role not in ["team_lead", "regular_user"]:
+    if current_user.role not in ["team_lead", "team_member"]:
         raise HTTPException(status_code=403, detail="Only Admin/Sales can promote staging leads")
     
     try:
@@ -1866,7 +1908,7 @@ def get_potential_reactivations_endpoint(
     Returns leads with matching center and age category that are in Nurture, On Break,
     or Dead with 'Timing Mismatch' reason, and do_not_contact is False.
     """
-    if current_user.role not in ["team_lead", "regular_user"]:
+    if current_user.role not in ["team_lead", "team_member"]:
         raise HTTPException(status_code=403, detail="Only sales roles can view reactivations")
     
     try:

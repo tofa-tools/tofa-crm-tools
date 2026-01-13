@@ -29,12 +29,12 @@ class StudentBatchLink(SQLModel, table=True):
 
 
 class User(SQLModel, table=True):
-    """User model with roles: team_lead, regular_user, coach"""
+    """User model with roles: team_lead, team_member, coach, observer"""
     id: Optional[int] = Field(default=None, primary_key=True)
     email: str = Field(unique=True, index=True)
     hashed_password: str
     full_name: str
-    role: str = Field(default="regular_user")  # 'team_lead', 'regular_user', 'coach'
+    role: str = Field(default="team_member")  # 'team_lead', 'team_member', 'coach', 'observer'
     is_active: bool = Field(default=True)
     
     # Relationships

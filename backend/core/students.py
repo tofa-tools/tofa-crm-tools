@@ -284,7 +284,7 @@ def update_student(
         db: Database session
         student_id: ID of the student to update
         user_id: ID of the user performing the update (for audit logging)
-        user_role: Role of the user ('team_lead', 'regular_user', 'coach')
+        user_role: Role of the user ('team_lead', 'team_member', 'coach', 'observer')
         center_id: New center ID (if changing)
         subscription_plan: Subscription plan
         subscription_start_date: Subscription start date

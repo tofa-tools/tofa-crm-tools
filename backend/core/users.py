@@ -39,7 +39,7 @@ def create_user(
         email: User email
         password: Plain text password (will be hashed)
         full_name: User's full name
-        role: User role (team_lead, regular_user, observer, coach)
+        role: User role (team_lead, team_member, observer, coach)
         center_ids: List of center IDs to assign user to
         
     Returns:

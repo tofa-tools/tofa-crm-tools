@@ -2,7 +2,7 @@
 User-related Pydantic schemas.
 """
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 
 class UserCreateSchema(BaseModel):
@@ -10,7 +10,7 @@ class UserCreateSchema(BaseModel):
     email: str
     password: str
     full_name: str
-    role: str = "regular_user"  # 'team_lead', 'regular_user', 'coach'
+    role: Literal["team_lead", "team_member", "coach", "observer"] = "team_member"
     center_ids: List[int] = []
     is_active: bool = True
 
@@ -18,7 +18,7 @@ class UserCreateSchema(BaseModel):
 class UserUpdateSchema(BaseModel):
     """Schema for updating an existing user."""
     full_name: Optional[str] = None
-    role: Optional[str] = None
+    role: Optional[Literal["team_lead", "team_member", "coach", "observer"]] = None
     is_active: Optional[bool] = None
     password: Optional[str] = None  # If provided, will be hashed and updated
     center_ids: Optional[List[int]] = None  # If provided, will replace all existing center assignments

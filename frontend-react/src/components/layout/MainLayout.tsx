@@ -45,7 +45,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
     );
   }
 
-  // Desktop layout: Sidebar for team_lead and regular_user
+  // Desktop layout: Sidebar for team_lead and team_member
   return (
     <div className="flex min-h-screen bg-gray-50">
       <Sidebar isCollapsed={isCollapsed} onToggleCollapse={toggleCollapse} />
