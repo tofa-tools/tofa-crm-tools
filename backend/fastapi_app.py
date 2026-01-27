@@ -181,9 +181,13 @@ async def login(
     db: Session = Depends(get_session)
 ):
     """Login endpoint - returns JWT token."""
-    user = verify_user_credentials(db, form_data.username, form_data.password)
-    if not user:
-        raise HTTPException(status_code=400, detail="Incorrect email or password")
+    try:
+        user = verify_user_credentials(db, form_data.username, form_data.password)
+        if not user:
+            raise HTTPException(status_code=400, detail="Incorrect email or password")
+    except ValueError as e:
+        # Handle deactivated account error
+        raise HTTPException(status_code=401, detail=str(e))
     
     access_token = create_access_token(data={"sub": user.email})
     return {
@@ -281,6 +285,34 @@ def update_user_endpoint(
             password=user_data.password,
             center_ids=user_data.center_ids
         )
+        return {
+            "id": updated_user.id,
+            "email": updated_user.email,
+            "full_name": updated_user.full_name,
+            "role": updated_user.role,
+            "is_active": updated_user.is_active
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/users/{user_id}/toggle-status")
+def toggle_user_status_endpoint(
+    user_id: int,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Toggle a user's active status (team leads only)."""
+    if current_user.role != "team_lead":
+        raise HTTPException(status_code=403, detail="Only team leads can toggle user status")
+    
+    # Prevent team lead from deactivating themselves
+    if current_user.id == user_id:
+        raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
+    
+    try:
+        from backend.core.users import toggle_user_status
+        updated_user = toggle_user_status(db=db, user_id=user_id)
         return {
             "id": updated_user.id,
             "email": updated_user.email,
@@ -1538,100 +1570,161 @@ async def get_skill_summary_endpoint(
 
 
 # --- LEAD STAGING ENDPOINTS ---
-@app.post("/leads/staging")
+@app.post("/staging/leads")
 async def create_staging_lead_endpoint(
-    player_name: str,
-    phone: str,
-    center_id: int,
-    date_of_birth: Optional[str] = None,
+    player_name: str = Body(...),
+    phone: str = Body(...),
+    email: Optional[str] = Body(None),
+    center_id: int = Body(...),
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
     """
     Create a staging lead (coaches only).
+    Includes duplicate check against both Lead and LeadStaging tables.
     
     Body Parameters:
         player_name: Player's name
         phone: Phone number
+        email: Optional email address
         center_id: Center ID
-        date_of_birth: Optional date of birth (YYYY-MM-DD format)
     """
     if current_user.role != "coach":
         raise HTTPException(status_code=403, detail="Only coaches can create staging leads")
-    
-    # Parse date_of_birth if provided
-    dob = None
-    if date_of_birth:
-        try:
-            from datetime import datetime
-            dob = datetime.strptime(date_of_birth, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
     
     try:
         staging_lead = create_staging_lead(
             db=db,
             player_name=player_name,
             phone=phone,
+            email=email,
             center_id=center_id,
-            date_of_birth=dob,
-            user_id=current_user.id
+            created_by_id=current_user.id
         )
         return staging_lead
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.get("/leads/staging")
+@app.get("/staging/leads")
 async def get_staging_leads_endpoint(
     center_id: Optional[int] = None,
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get all staging leads (Admin/Sales only).
+    Get staging leads for Team Members (filtered by their assigned centers).
+    Team Leads see all staging leads.
     
     Query Parameters:
-        center_id: Optional center ID to filter by
+        center_id: Optional center ID to filter by (overrides user centers)
     """
     if current_user.role not in ["team_lead", "team_member"]:
-        raise HTTPException(status_code=403, detail="Only Admin/Sales can view staging leads")
+        raise HTTPException(status_code=403, detail="Only Team Leads and Team Members can view staging leads")
     
-    staging_leads = get_staging_leads(db=db, center_id=center_id)
+    staging_leads = get_staging_leads(db=db, user=current_user, center_id=center_id)
     return staging_leads
 
 
-@app.post("/leads/staging/{staging_id}/promote")
+@app.post("/staging/leads/{staging_id}/promote")
 async def promote_staging_lead_endpoint(
     staging_id: int,
-    email: Optional[str] = None,
-    address: Optional[str] = None,
-    player_age_category: Optional[str] = None,
+    player_age_category: str = Body(...),
+    email: Optional[str] = Body(None),
+    address: Optional[str] = Body(None),
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Promote a staging lead to a full Lead record (Admin/Sales only).
+    Promote a staging lead to a full Lead record (Team Leads and Team Members only).
+    Requires age_category to be provided.
     
     Body Parameters:
-        email: Optional email address
+        player_age_category: Required age category (e.g., 'U9', 'U11')
+        email: Optional email address (overrides staging email if provided)
         address: Optional address
-        player_age_category: Optional age category (e.g., 'U9', 'U11')
     """
     if current_user.role not in ["team_lead", "team_member"]:
-        raise HTTPException(status_code=403, detail="Only Admin/Sales can promote staging leads")
+        raise HTTPException(status_code=403, detail="Only Team Leads and Team Members can promote staging leads")
     
     try:
         lead = promote_staging_lead(
             db=db,
             staging_id=staging_id,
+            player_age_category=player_age_category,
             email=email,
             address=address,
-            player_age_category=player_age_category,
             user_id=current_user.id
         )
         return lead
     except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# --- DIRECT LEAD CREATION ENDPOINT (Team Leads only) ---
+@app.post("/leads")
+async def create_lead_endpoint(
+    player_name: str = Body(...),
+    player_age_category: str = Body(...),
+    phone: str = Body(...),
+    email: Optional[str] = Body(None),
+    address: Optional[str] = Body(None),
+    center_id: int = Body(...),
+    status: str = Body("New"),
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Create a full lead record directly (Team Leads only).
+    For manual entry of complete lead information.
+    
+    Body Parameters:
+        player_name: Player's name
+        player_age_category: Age category (e.g., 'U9', 'U11')
+        phone: Phone number
+        email: Optional email address
+        address: Optional address
+        center_id: Center ID
+        status: Lead status (default: 'New')
+    """
+    if current_user.role != "team_lead":
+        raise HTTPException(status_code=403, detail="Only Team Leads can create leads directly")
+    
+    # Check for duplicates
+    if check_duplicate_lead(db, player_name, phone):
+        raise HTTPException(status_code=400, detail="A lead with this name and phone number already exists")
+    
+    try:
+        from datetime import timedelta
+        from backend.models import Lead
+        import uuid
+        
+        # Verify center exists
+        center = db.get(Center, center_id)
+        if not center:
+            raise HTTPException(status_code=400, detail=f"Center {center_id} not found")
+        
+        # Create lead
+        initial_followup = datetime.utcnow() + timedelta(hours=24)
+        new_lead = Lead(
+            created_time=datetime.utcnow(),
+            player_name=player_name,
+            player_age_category=player_age_category,
+            phone=phone,
+            email=email,
+            address=address,
+            center_id=center_id,
+            status=status,
+            public_token=str(uuid.uuid4()),
+            next_followup_date=initial_followup
+        )
+        
+        db.add(new_lead)
+        db.commit()
+        db.refresh(new_lead)
+        
+        return new_lead
+    except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 

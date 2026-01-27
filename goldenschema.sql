@@ -205,3 +205,21 @@ ON "student"(is_active) WHERE is_active = TRUE;
 -- Composite Index for faster activity feeds
 CREATE INDEX IF NOT EXISTS idx_audit_lead_timestamp 
 ON "auditlog"(lead_id, timestamp DESC);
+
+-- 1. Create LeadStaging Table
+CREATE TABLE IF NOT EXISTS "leadstaging" (
+    id SERIAL PRIMARY KEY,
+    player_name VARCHAR NOT NULL,
+    phone VARCHAR NOT NULL,
+    email VARCHAR,
+    center_id INTEGER NOT NULL REFERENCES "center"(id) ON DELETE CASCADE,
+    created_by_id INTEGER NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+    created_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (now() at time zone 'utc')
+);
+
+-- 2. Add Index for Duplicate Checking (Performance)
+-- Since we check by Name + Phone, an index makes this query lightning fast
+CREATE INDEX IF NOT EXISTS idx_staging_name_phone ON "leadstaging" (player_name, phone);
+
+-- 3. Add Index for Team Member Lookups
+CREATE INDEX IF NOT EXISTS idx_staging_center ON "leadstaging" (center_id);

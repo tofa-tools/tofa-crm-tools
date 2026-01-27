@@ -1,49 +1,57 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+
+# Next.js
+.next/
+out/
+build/
+dist/
+
+# Production
+*.log
+
+# Misc
+.DS_Store
+*.pem
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local env files
+.env*.local
+.env
+
+# Vercel
+.vercel
+
+# Turbo
+.turbo
+
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-*.egg-info/
-dist/
-build/
-
-# Virtual environments
-.venv/
-venv/
 env/
+venv/
+.venv/
 ENV/
-
-# Environment variables
-.env
-.env.local
+env.bak/
+venv.bak/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
 # OS
-.DS_Store
 Thumbs.db
-
-# Logs
-*.log
-
-# Database
-*.db
-*.sqlite
-
-# Frontend
-node_modules/
-.next/
-out/
-frontend-react/.next/
-frontend-react/node_modules/
-frontend-react/out/
-
-# PythonAnywhere
-*.pyc
-

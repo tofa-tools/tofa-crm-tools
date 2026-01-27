@@ -156,6 +156,9 @@ def verify_user_credentials(db: Session, email: str, password: str) -> Optional[
         
     Returns:
         User object if credentials are valid, None otherwise
+        
+    Raises:
+        ValueError: If user account is deactivated (is_active is False)
     """
     user = get_user_by_email(db, email)
     if not user:
@@ -165,5 +168,36 @@ def verify_user_credentials(db: Session, email: str, password: str) -> Optional[
     if not verify_password(password, user.hashed_password):
         return None
     
+    # Check if user account is active
+    if not user.is_active:
+        raise ValueError("Your account has been deactivated. Please contact the administrator.")
+    
+    return user
+
+
+def toggle_user_status(db: Session, user_id: int) -> User:
+    """
+    Toggle a user's active status.
+    
+    Args:
+        db: Database session
+        user_id: ID of user to toggle
+        
+    Returns:
+        Updated User object with flipped is_active status
+        
+    Raises:
+        ValueError: If user not found
+    """
+    user = get_user_by_id(db, user_id)
+    if not user:
+        raise ValueError(f"User {user_id} not found")
+    
+    # Flip the is_active status
+    user.is_active = not user.is_active
+    
+    db.add(user)
+    db.commit()
+    db.refresh(user)
     return user
 

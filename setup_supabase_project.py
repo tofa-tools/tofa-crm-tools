@@ -430,8 +430,8 @@ def create_project():
     print("1. PIP INSTALL:  pip install -r requirements.txt")
     print("2. SUPABASE:     Go to Supabase -> SQL Editor -> Copy contents of 'supabase_schema.sql' -> Run.")
     print("3. ENV CONFIG:   Open .env file -> Paste your Supabase Connection String.")
-    print("4. RUN BACKEND:  uvicorn backend.main:app --reload")
-    print("5. RUN FRONTEND: cd frontend-react && npm run dev")
+    print("4. RUN BACKEND:  uvicorn backend.fastapi_app:app --reload")
+    print("5. RUN FRONTEND: cd apps/web && npm run dev")
 
 if __name__ == "__main__":
     create_project()

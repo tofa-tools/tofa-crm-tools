@@ -338,10 +338,12 @@ class LeadStaging(SQLModel, table=True):
     """Staging area for leads captured by coaches before promotion to full Lead records"""
     id: Optional[int] = Field(default=None, primary_key=True)
     player_name: str
-    date_of_birth: Optional[date] = None
     phone: str
+    email: Optional[str] = None
     center_id: int = Field(foreign_key="center.id")
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
     
     # Relationships
     center: Optional[Center] = Relationship()
+    created_by: Optional[User] = Relationship()

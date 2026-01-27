@@ -1,5 +1,24 @@
 {
-  "dependencies": {
-    "@supabase/supabase-js": "^2.89.0"
+  "name": "tofa-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "npm@10.8.2", 
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "clean": "turbo run clean",
+    "mobile:start": "cd apps/mobile && npx expo start",
+    "mobile:start:clear": "cd apps/mobile && npx expo start --clear"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
