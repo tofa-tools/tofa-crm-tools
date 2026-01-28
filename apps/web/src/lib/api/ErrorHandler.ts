@@ -63,7 +63,7 @@ export class StandardErrorHandler implements ErrorHandler {
   }
 
   handle400(error: AxiosError): ValidationError {
-    const detail = error.response?.data?.detail;
+    const detail = (error.response?.data as any)?.detail;
     
     // Handle different error formats
     if (typeof detail === 'string') {

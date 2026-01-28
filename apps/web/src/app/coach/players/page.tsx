@@ -227,8 +227,13 @@ export default function CoachPlayersPage() {
   };
 
   // Redirect if not a coach
+  useEffect(() => {
+    if (user && user.role !== 'coach') {
+      router.push('/command-center');
+    }
+  }, [user, router]);
+
   if (user?.role !== 'coach') {
-    router.push('/command-center');
     return null;
   }
 
@@ -266,7 +271,9 @@ export default function CoachPlayersPage() {
             </div>
             {/* Slim Search Bar - Pinned Below Header */}
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                <Search size={16} />
+              </div>
               <input
                 type="text"
                 placeholder="Search..."
@@ -283,7 +290,9 @@ export default function CoachPlayersPage() {
           {Object.keys(filteredStudentsByBatch).length === 0 ? (
             <div className="flex items-center justify-center py-12">
               <div className="text-center">
-                <User className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+                <div className="h-12 w-12 text-gray-300 mx-auto mb-3">
+                  <User size={48} />
+                </div>
                 <h3 className="text-sm font-black text-gray-600 uppercase tracking-wide mb-1">
                   {searchTerm ? 'No students found' : 'No students assigned'}
                 </h3>
@@ -424,7 +433,7 @@ export default function CoachPlayersPage() {
                                       ? `Last report: ${lastReportDate.toLocaleDateString()}`
                                       : 'Skill report available'}
                               >
-                                <BarChart3 className="h-4 w-4" />
+                                <BarChart3 size={16} />
                               </button>
                             )}
                           </div>
@@ -448,7 +457,9 @@ export default function CoachPlayersPage() {
           playerName={selectedStudent.name}
           onSuccess={() => {
             // Refresh data
-            window.location.reload();
+            if (typeof window !== 'undefined') {
+              window.location.reload();
+            }
           }}
         />
       )}

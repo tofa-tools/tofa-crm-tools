@@ -11,6 +11,7 @@ interface AuthContextType {
   user: AuthUser | null;
   login: (email: string, password: string) => Promise<AuthUser>;
   logout: () => void;
+  refreshUser?: () => Promise<void>;
   isAuthenticated: boolean;
   isLoading: boolean;
 }
@@ -60,11 +61,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshUser = React.useCallback(async (silent: boolean = false) => {
+    console.log('[AuthContext] refreshUser called, silent:', silent);
     try {
-      if (!tokenStorageRef.current) return;
+      if (!tokenStorageRef.current) {
+        console.log('[AuthContext] No token storage available in refreshUser');
+        return;
+      }
       
       const token = await tokenStorageRef.current.getToken();
       if (!token) {
+        console.log('[AuthContext] No token found in refreshUser');
         if (!silent) {
           await logout();
         }
@@ -73,14 +79,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       // Check if token is expired before making API call
       if (isTokenExpired(token)) {
-        console.log('Token expired, logging out');
+        console.log('[AuthContext] Token expired, logging out');
         if (!silent) {
           await logout();
         }
         return;
       }
       
+      console.log('[AuthContext] Calling authAPI.getCurrentUser() (GET /me)...');
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+      console.log('[AuthContext] API URL:', apiUrl);
+      
       const userData = await authAPI.getCurrentUser();
+      console.log('[AuthContext] getCurrentUser response received:', userData);
+      
       // Convert User type to AuthUser type (match what login returns)
       // AuthUser only has email and role, not full_name
       const authUser: AuthUser = {
@@ -92,13 +104,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await tokenStorageRef.current.setUser(authUser);
       }
       setUser(authUser);
+      console.log('[AuthContext] User updated successfully');
     } catch (error: any) {
-      console.error('Error refreshing user:', error);
+      console.error('[AuthContext] Error refreshing user:', error);
+      console.error('[AuthContext] Error details:', {
+        message: error?.message,
+        status: error?.response?.status,
+        statusText: error?.response?.statusText,
+        data: error?.response?.data,
+        url: error?.config?.url,
+        baseURL: error?.config?.baseURL,
+      });
       // Only logout if it's a 401 (unauthorized), not network errors
       if (error?.response?.status === 401) {
+        console.log('[AuthContext] 401 Unauthorized, logging out');
         if (!silent) {
           await logout();
         }
+      } else {
+        console.log('[AuthContext] Non-401 error, not logging out (network error?)');
       }
       // For other errors (network, etc.), don't logout - just log the error
     }
@@ -211,7 +235,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // Restore user from token storage on mount
     const restoreUser = async () => {
+      console.log('[AuthContext] Starting restoreUser...');
       if (!tokenStorageRef.current) {
+        console.log('[AuthContext] No token storage available');
         setIsLoading(false);
         return;
       }
@@ -219,24 +245,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const storedUser = await tokenStorageRef.current.getUser();
         const token = await tokenStorageRef.current.getToken();
+        console.log('[AuthContext] Stored user:', storedUser ? 'found' : 'not found');
+        console.log('[AuthContext] Token:', token ? 'found' : 'not found');
         
         if (storedUser && token) {
           // Check token expiration before setting user
           if (!isTokenExpired(token)) {
+            console.log('[AuthContext] Token valid, setting user and refreshing from backend...');
             setUser(storedUser);
             // Refresh user data from backend silently (don't logout on error)
-            refreshUser(true);
+            await refreshUser(true);
+            console.log('[AuthContext] User refresh completed');
           } else {
-            console.log('Token expired, not restoring user');
+            console.log('[AuthContext] Token expired, not restoring user');
             await logout();
           }
+        } else {
+          console.log('[AuthContext] No stored user or token, skipping restore');
         }
       } catch (error) {
-        console.error('Error restoring user:', error);
+        console.error('[AuthContext] Error restoring user:', error);
         if (tokenStorageRef.current) {
           await tokenStorageRef.current.clear();
         }
       } finally {
+        console.log('[AuthContext] Restore complete, setting isLoading to false');
         setIsLoading(false);
       }
     };

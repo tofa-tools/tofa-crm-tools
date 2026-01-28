@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { MetricCard } from '@/components/ui/MetricCard';
 import { CalendarHeatmap } from '@/components/planner/CalendarHeatmap';
 import { DailyAgenda } from '@/components/planner/DailyAgenda';

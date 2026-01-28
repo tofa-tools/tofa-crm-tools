@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { MainLayout } from '@/components/layout/MainLayout';
@@ -112,9 +112,14 @@ export default function CoachDashboardPage() {
     return days.join(', ') || 'No schedule';
   };
 
-  // Redirect if not a coach (EARLY RETURN - all hooks must be above this)
+  // Redirect if not a coach
+  useEffect(() => {
+    if (user && user.role !== 'coach') {
+      router.push('/command-center');
+    }
+  }, [user, router]);
+
   if (user?.role !== 'coach') {
-    router.push('/command-center');
     return null;
   }
 
@@ -139,7 +144,7 @@ export default function CoachDashboardPage() {
           subtitle={currentDate}
           actions={
             <div className="px-3 py-1.5 bg-tofa-gold/20 backdrop-blur-sm rounded-full border-2 border-tofa-gold/40 flex items-center gap-1.5">
-              <Calendar className="h-4 w-4" />
+              <Calendar size={16} />
               <span className="text-sm font-black">{sortedBatches.length}</span>
             </div>
           }
@@ -150,9 +155,11 @@ export default function CoachDashboardPage() {
           {sortedBatches.length === 0 ? (
             <div className="flex items-center justify-center py-12">
               <div className="text-center">
-                <Calendar className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+                <div className="h-12 w-12 text-gray-300 mx-auto mb-3">
+                  <Calendar size={48} />
+                </div>
                 <h3 className="text-sm font-black text-gray-600 uppercase tracking-wide mb-1">No Sessions Today</h3>
-                <p className="text-xs text-gray-500">You don't have any batches scheduled for today.</p>
+                <p className="text-xs text-gray-500">You don&apos;t have any batches scheduled for today.</p>
               </div>
             </div>
           ) : (
@@ -205,7 +212,7 @@ export default function CoachDashboardPage() {
                         onClick={() => router.push(`/check-in?batchId=${batch.id}`)}
                         className="px-4 py-2.5 bg-gradient-to-r from-emerald-500 to-teal-600 text-white font-black rounded-lg hover:from-emerald-600 hover:to-teal-700 active:scale-95 transition-all duration-200 flex items-center gap-1.5 shadow-lg hover:shadow-xl text-xs uppercase tracking-wide"
                       >
-                        <CheckCircle2 className="h-4 w-4" />
+                        <CheckCircle2 size={16} />
                         <span>START</span>
                       </button>
                     </div>

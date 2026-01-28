@@ -315,8 +315,8 @@ export default function PreferencePage() {
         {/* Loss Reason Form */}
         {showLossReason && (
           <div className="bg-white rounded-lg shadow-md p-6 space-y-4 mt-6">
-            <h2 className="text-lg font-semibold text-gray-900">We're sorry to see you go</h2>
-            <p className="text-sm text-gray-600">Please let us know why you're no longer interested. This helps us improve.</p>
+            <h2 className="text-lg font-semibold text-gray-900">We&apos;re sorry to see you go</h2>
+            <p className="text-sm text-gray-600">Please let us know why you&apos;re no longer interested. This helps us improve.</p>
             
             <div>
               <label htmlFor="lossReason" className="block text-sm font-medium text-gray-700 mb-2">

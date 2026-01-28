@@ -273,8 +273,7 @@ export default function CentersPage() {
                           onClick={() => handleEdit(center)}
                           className="flex items-center gap-1 text-tofa-navy hover:text-tofa-gold font-medium"
                         >
-                          {/* @ts-expect-error - React types mismatch between lucide-react and @types/react */}
-                          <Edit className="h-4 w-4" />
+                          <Edit size={16} />
                           Edit
                         </button>
                       </td>

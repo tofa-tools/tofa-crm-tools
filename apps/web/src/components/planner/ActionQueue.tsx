@@ -55,8 +55,9 @@ export function ActionQueue({
     if (!studentsResponse) return [];
     if (Array.isArray(studentsResponse)) return studentsResponse;
     // Handle potential wrapper (though API should return array directly)
-    if (studentsResponse && typeof studentsResponse === 'object' && 'students' in studentsResponse) {
-      return Array.isArray(studentsResponse.students) ? studentsResponse.students : [];
+    const response = studentsResponse as any;
+    if (response && typeof response === 'object' && 'students' in response) {
+      return Array.isArray(response.students) ? response.students : [];
     }
     return [];
   }, [studentsResponse]);
@@ -137,7 +138,7 @@ export function ActionQueue({
       const unscheduled = allLeads.filter(lead => {
         if (lead.status !== 'New' && lead.status !== 'Called') return false;
         if (lead.next_followup_date) return false; // Must have NO follow-up date
-        if (lead.status === 'Nurture' || lead.status === 'Dead/Not Interested') return false;
+        // Note: Status is already filtered to 'New' or 'Called', so Nurture/Dead checks are redundant but kept for clarity
         return true;
       });
       return {
@@ -149,7 +150,7 @@ export function ActionQueue({
     } else if (filterType === 'hot_trials') {
       const hotTrials = allLeads.filter(lead => {
         if (lead.status !== 'Trial Attended') return false;
-        if (lead.status === 'Joined') return false;
+        // Note: Status is already 'Trial Attended', so 'Joined' check is redundant
         if (!lead.last_updated) return false;
         return isWithinLastNHours(lead.last_updated, 24);
       });
@@ -182,7 +183,7 @@ export function ActionQueue({
     } else if (filterType === 'post_trial_no_response') {
       const postTrialNoResponse = allLeads.filter(lead => {
         if (lead.status !== 'Trial Attended') return false;
-        if (lead.status === 'Joined') return false;
+        // Note: Status is already 'Trial Attended', so 'Joined' check is redundant
         if (!lead.last_updated) return false;
         // Check if NOT within last 24 hours (opposite of hot_trials)
         return !isWithinLastNHours(lead.last_updated, 24);
@@ -194,7 +195,7 @@ export function ActionQueue({
         isStudent: false,
       };
     } else if (filterType === 'renewals') {
-      const renewals = allStudents.filter(student => {
+      const renewals = allStudents.filter((student: any) => {
         // Backend checks: is_active == True and subscription_end_date is not None
         if (student.is_active !== true) return false;
         if (!student.subscription_end_date) return false;
@@ -246,7 +247,7 @@ export function ActionQueue({
       
       // Note: We'll filter by active students and let the backend handle milestone calculation
       // For now, we show all active students and let the modal handle milestone detection
-      const milestoneStudents = allStudents.filter(student => student.is_active === true);
+      const milestoneStudents = allStudents.filter((student: any) => student.is_active === true);
       
       return {
         title: '⭐ Milestones Reached',
@@ -699,7 +700,7 @@ function LeadCard({ lead, onCall, onUpdate, filterType }: LeadCardProps & { filt
            Array.isArray((lead.extra_data as any).coach_trial_feedback) && 
            (lead.extra_data as any).coach_trial_feedback.length > 0 && (
             <div className="mt-2 p-2 bg-purple-50 border border-purple-200 rounded text-xs">
-              <span className="font-semibold text-purple-800">💡 Coach's Tip:</span>
+              <span className="font-semibold text-purple-800">💡 Coach&apos;s Tip:</span>
               <span className="ml-1 text-purple-700">
                 {(lead.extra_data as any).coach_trial_feedback[(lead.extra_data as any).coach_trial_feedback.length - 1]?.note || ''}
               </span>
@@ -769,7 +770,7 @@ function EnhancedLeadCard({ lead, onUpdate, filterType, section }: EnhancedLeadC
           </div>
           <p className="text-xs text-gray-600 mb-2">
             {lead.player_age_category || 'Age N/A'}
-            {showFollowupDate && (
+            {showFollowupDate && lead.next_followup_date && (
               <span className="ml-2 text-gray-500">
                 • {format(new Date(lead.next_followup_date), 'MMM d')}
               </span>

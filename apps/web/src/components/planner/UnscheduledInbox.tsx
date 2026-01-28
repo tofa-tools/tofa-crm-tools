@@ -19,7 +19,7 @@ export function UnscheduledInbox({ filterType, onLeadClick }: UnscheduledInboxPr
     return allLeads.filter(lead => {
       if (lead.status !== 'New' && lead.status !== 'Called') return false;
       if (lead.next_followup_date) return false; // Has a follow-up date, so it's scheduled
-      if (lead.status === 'Dead/Not Interested' || lead.status === 'Nurture') return false;
+      // Note: Status is already filtered to 'New' or 'Called', so Dead/Nurture checks are redundant but kept for clarity
       return true;
     });
   }, [allLeads]);

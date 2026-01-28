@@ -11,15 +11,19 @@ interface FreshnessIndicatorProps {
 
 export function FreshnessIndicator({ lead }: FreshnessIndicatorProps) {
   // Use last_updated if available, otherwise fall back to created_time
-  const lastUpdated = lead.last_updated ? parseISO(lead.last_updated) : parseISO(lead.created_time);
+  const dateString = lead.last_updated || lead.created_time;
+  if (!dateString) {
+    return null;
+  }
+  const lastUpdated = parseISO(dateString);
   const freshness = getLeadFreshness(lastUpdated.toISOString());
   const colorClass = getFreshnessColor(freshness);
 
   // Use date-fns formatDistanceToNow for relative time (e.g., "3 hours ago", "2 days ago")
   const relativeTime = formatDistanceToNow(lastUpdated, { addSuffix: true });
 
-  // Add pulse animation for rotten (red) indicators
-  const isRotten = freshness === 'rotten';
+  // Add pulse animation for rotting (red) indicators
+  const isRotten = freshness === 'rotting';
 
   return (
     <span

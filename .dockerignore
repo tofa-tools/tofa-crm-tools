@@ -1,0 +1,58 @@
+# Dependencies
+**/node_modules
+**/dist
+**/.next
+**/.expo
+**/venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.pyd
+**/.pytest_cache
+
+# Build artifacts
+**/.turbo
+**/.cache
+**/build
+**/out
+
+# Environment files
+**/.env
+**/.env.local
+**/.env.*.local
+**/.env.development
+**/.env.test
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# IDE
+**/.vscode
+**/.idea
+**/*.swp
+**/*.swo
+**/.DS_Store
+
+# Documentation
+**/*.md
+!README.md
+!SETUP.md
+
+# Logs
+**/*.log
+**/logs
+**/npm-debug.log*
+**/yarn-debug.log*
+**/yarn-error.log*
+
+# Testing
+**/coverage
+**/.nyc_output
+**/test-results
+
+# Misc
+**/.expo-shared
+**/apps_structure.txt
+**/SAAS_READINESS_AUDIT.md

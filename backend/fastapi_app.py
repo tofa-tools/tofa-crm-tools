@@ -159,12 +159,19 @@ async def observer_read_only_middleware(request: Request, call_next):
     return await call_next(request)
 
 # CORS middleware - Allow React app to make requests
+# Include both localhost and 127.0.0.1, and also allow requests from Docker network
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # React dev server
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",  # Alternative port
+        "http://0.0.0.0:3000",  # Docker network binding
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 

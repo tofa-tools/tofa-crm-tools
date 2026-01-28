@@ -66,6 +66,7 @@ export function ExecutiveSidebar() {
               .map(([transition, rate]) => {
                 const [from, to] = transition.split('->');
                 const percentage = (rate * 100).toFixed(1);
+                const percentageNum = rate * 100;
                 return (
                   <div key={transition} className="space-y-1">
                     <div className="flex items-center justify-between text-xs">
@@ -81,7 +82,7 @@ export function ExecutiveSidebar() {
                         className={`h-2 rounded-full ${
                           rate >= 0.5 ? 'bg-emerald-400' : rate >= 0.3 ? 'bg-yellow-400' : 'bg-red-400'
                         }`}
-                        style={{ width: `${Math.min(percentage, 100)}%` }}
+                        style={{ width: `${Math.min(percentageNum, 100)}%` }}
                       />
                     </div>
                   </div>

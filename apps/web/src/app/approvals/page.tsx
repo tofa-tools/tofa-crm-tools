@@ -93,12 +93,16 @@ export default function ApprovalsPage() {
         {/* Requests Table */}
         {isLoading ? (
           <div className="flex items-center justify-center p-12">
-            <Loader2 className="w-8 h-8 animate-spin text-tofa-gold" />
+            <div className="w-8 h-8 flex items-center justify-center animate-spin text-tofa-gold">
+              <Loader2 size={32} />
+            </div>
             <span className="ml-3 text-gray-600">Loading requests...</span>
           </div>
         ) : requests.length === 0 ? (
           <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-12 text-center">
-            <Clock className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+            <div className="w-16 h-16 mx-auto mb-4 text-gray-300">
+              <Clock size={64} />
+            </div>
             <p className="text-lg font-semibold text-gray-600">No Pending Requests</p>
             <p className="text-sm text-gray-500 mt-2">
               All status reversal requests have been resolved.
@@ -170,7 +174,7 @@ export default function ApprovalsPage() {
                             size="sm"
                             className="flex items-center gap-1"
                           >
-                            <Check className="w-4 h-4" />
+                            <Check size={16} />
                             Approve
                           </Button>
                           <button
@@ -178,7 +182,7 @@ export default function ApprovalsPage() {
                             disabled={resolveMutation.isPending}
                             className="flex items-center gap-1 px-3 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           >
-                            <X className="w-4 h-4" />
+                            <X size={16} />
                             Reject
                           </button>
                         </div>

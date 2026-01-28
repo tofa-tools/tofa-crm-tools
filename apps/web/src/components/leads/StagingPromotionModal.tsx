@@ -86,7 +86,6 @@ export function StagingPromotionModal({ isOpen, onClose, stagingLead }: StagingP
             className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
             aria-label="Close"
           >
-            {/* @ts-expect-error - React types mismatch between lucide-react and @types/react */}
             <X className="h-5 w-5 text-gray-500" />
           </button>
         </div>

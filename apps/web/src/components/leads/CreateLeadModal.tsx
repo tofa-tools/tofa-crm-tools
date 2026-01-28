@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { leadsAPI, centersAPI } from '@/lib/api';
 import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
@@ -24,7 +24,7 @@ export function CreateLeadModal({ isOpen, onClose }: CreateLeadModalProps) {
     queryKey: ['centers'],
     queryFn: () => centersAPI.getCenters(),
   });
-  const centers = centersData?.centers || [];
+  const centers = centersData || [];
   
   const [playerName, setPlayerName] = useState('');
   const [playerAgeCategory, setPlayerAgeCategory] = useState('');
@@ -33,6 +33,13 @@ export function CreateLeadModal({ isOpen, onClose }: CreateLeadModalProps) {
   const [address, setAddress] = useState('');
   const [centerId, setCenterId] = useState<number | ''>('');
   const [status, setStatus] = useState('New');
+
+  // Ensure status is always 'New' when modal opens
+  useEffect(() => {
+    if (isOpen) {
+      setStatus('New');
+    }
+  }, [isOpen]);
 
   const createLeadMutation = useMutation({
     mutationFn: (data: {
@@ -187,6 +194,7 @@ export function CreateLeadModal({ isOpen, onClose }: CreateLeadModalProps) {
               <Select
                 value={status}
                 onChange={(e) => setStatus(e.target.value)}
+                disabled
               >
                 {LEAD_STATUSES.map((s) => (
                   <option key={s} value={s}>

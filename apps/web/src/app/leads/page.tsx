@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -23,9 +23,9 @@ import { StagingLeadsModal } from '@/components/leads/StagingLeadsModal';
 import { CreateLeadModal } from '@/components/leads/CreateLeadModal';
 import { stagingAPI } from '@/lib/api';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Search, Calendar, Ghost, ArrowUp, ArrowDown, ChevronUp, ChevronDown, Plus } from 'lucide-react';
+import { Search, Calendar, Ghost, ArrowUp, ArrowDown, Plus } from 'lucide-react';
 
-export default function LeadsPage() {
+function LeadsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
@@ -122,6 +122,7 @@ export default function LeadsPage() {
         address: null,
         created_time: student.created_at,
         center_id: student.center_id,
+        next_followup_date: null, // Required by Lead type
       }))
     : (leadsResponse?.leads || []).filter((lead: Lead) => lead.status !== 'Joined'); // Filter out Joined status
   
@@ -251,7 +252,7 @@ export default function LeadsPage() {
                   onClick={() => setShowCreateLeadModal(true)}
                   className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-yellow-500 via-amber-600 to-yellow-700 text-brand-primary rounded-xl shadow-lg hover:shadow-xl font-semibold transition-all"
                 >
-                  <Plus className="w-4 h-4" />
+                  <Plus size={16} />
                   Add Lead
                 </button>
               )}
@@ -288,7 +289,7 @@ export default function LeadsPage() {
                 onClick={() => setIsPlannerOpen(!isPlannerOpen)} 
                 className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl shadow-sm hover:bg-gray-50 font-medium"
               >
-                <Calendar className="w-4 h-4" />
+                <Calendar size={16} />
                 {isPlannerOpen ? 'Close Planner' : 'Open Planner'}
               </button>
             </div>
@@ -301,7 +302,9 @@ export default function LeadsPage() {
         {stagingLeads.length > 0 && (user?.role === 'team_lead' || user?.role === 'team_member') && (
           <div className="bg-gradient-to-r from-indigo-600 to-violet-700 rounded-2xl p-5 text-white shadow-lg flex justify-between items-center">
             <div className="flex items-center gap-4">
-              <Ghost className="w-8 h-8 opacity-80" />
+              <div className="w-8 h-8 opacity-80">
+                <Ghost size={32} />
+              </div>
               <div>
                 <h3 className="text-lg font-bold">New Field Leads ({stagingLeads.length})</h3>
                 <p className="text-white/80 text-sm">Review walk-ins from coaches.</p>
@@ -314,7 +317,9 @@ export default function LeadsPage() {
         {/* Filter Toolbar (Restored) */}
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-wrap gap-4 items-center">
           <div className="relative flex-1 min-w-[300px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+              <Search size={20} />
+            </div>
             <input
               type="text"
               value={searchInputValue}
@@ -363,7 +368,7 @@ export default function LeadsPage() {
                     <div className="flex items-center gap-2">
                       <span>Player Name</span>
                       {sortBy === 'player_name' && (
-                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                        sortDirection === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />
                       )}
                     </div>
                   </th>
@@ -376,7 +381,7 @@ export default function LeadsPage() {
                     <div className="flex items-center gap-2">
                       <span>Status</span>
                       {sortBy === 'status' && (
-                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                        sortDirection === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />
                       )}
                     </div>
                   </th>
@@ -388,7 +393,7 @@ export default function LeadsPage() {
                     <div className="flex items-center gap-2">
                       <span>Freshness</span>
                       {sortBy === 'created_time' && (
-                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                        sortDirection === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />
                       )}
                     </div>
                   </th>
@@ -399,7 +404,7 @@ export default function LeadsPage() {
                     <div className="flex items-center gap-2">
                       <span>Next Follow-up</span>
                       {sortBy === 'next_followup_date' && (
-                        sortDirection === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                        sortDirection === 'asc' ? <ArrowUp size={12} /> : <ArrowDown size={12} />
                       )}
                     </div>
                   </th>
@@ -410,11 +415,11 @@ export default function LeadsPage() {
                 {sortedLeadsData.length > 0 ? sortedLeadsData.map((lead: Lead) => (
                   <tr key={lead.id} onClick={() => setExpandedLeadId(lead.id)} className="group hover:bg-brand-accent/10 cursor-pointer transition-colors">
                     <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
-                      <input type="checkbox" checked={selectedLeadIds.has(lead.id)} disabled={user?.role === 'observer'} className="disabled:opacity-50 disabled:cursor-not-allowed" onChange={() => {
+                      <input type="checkbox" checked={selectedLeadIds.has(lead.id)} disabled={user?.role === 'observer'} onChange={() => {
                         const next = new Set(selectedLeadIds);
                         if (next.has(lead.id)) next.delete(lead.id); else next.add(lead.id);
                         setSelectedLeadIds(next);
-                      }} className="rounded border-gray-300 text-brand-accent" />
+                      }} className="rounded border-gray-300 text-brand-accent disabled:opacity-50 disabled:cursor-not-allowed" />
                     </td>
                     <td className="px-6 py-4 text-sm font-bold text-gray-900">{lead.player_name}</td>
                     <td className="px-6 py-4 text-sm text-gray-500 font-medium">
@@ -485,5 +490,20 @@ export default function LeadsPage() {
       <CreateLeadModal isOpen={showCreateLeadModal} onClose={() => setShowCreateLeadModal(false)} />
       </div>
     </MainLayout>
+  );
+}
+
+export default function LeadsPage() {
+  return (
+    <Suspense fallback={
+      <MainLayout>
+        <div className="flex flex-col items-center justify-center min-h-[400px]">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+          <p className="mt-4 text-gray-600">Loading...</p>
+        </div>
+      </MainLayout>
+    }>
+      <LeadsPageContent />
+    </Suspense>
   );
 }

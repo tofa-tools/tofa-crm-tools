@@ -2,13 +2,14 @@
 
 import { useState } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { useDailyQueue, useDailyStats } from '@/hooks/useTasks';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { FreshnessIndicator } from '@/components/ui/FreshnessIndicator';
-import { formatDateTime, formatDate } from '@/lib/utils';
 import { useUpdateLead } from '@/hooks/useLeads';
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
+import { useCenters } from '@/hooks/useCenters';
 import toast from 'react-hot-toast';
 import type { Lead, LeadStatus } from '@tofa/core';
 import { useUserStreak, useUserTodayStats } from '@/hooks/useUserStats';
@@ -22,6 +23,7 @@ export default function TasksPage() {
   const { data: dailyStats } = useDailyStats(selectedDate);
   const { data: streakData } = useUserStreak();
   const { data: todayStats } = useUserTodayStats(selectedDate);
+  const { data: centers = [] } = useCenters();
   const updateLeadMutation = useUpdateLead();
 
   if (!user) {
@@ -161,6 +163,7 @@ export default function TasksPage() {
                       key={lead.id}
                       lead={lead}
                       category="overdue"
+                      centers={centers}
                       onView={() => handleViewLead(lead.id)}
                       onQuickAction={handleQuickAction}
                     />
@@ -183,6 +186,7 @@ export default function TasksPage() {
                       key={lead.id}
                       lead={lead}
                       category="due_today"
+                      centers={centers}
                       onView={() => handleViewLead(lead.id)}
                       onQuickAction={handleQuickAction}
                     />
@@ -205,6 +209,7 @@ export default function TasksPage() {
                       key={lead.id}
                       lead={lead}
                       category="upcoming"
+                      centers={centers}
                       onView={() => handleViewLead(lead.id)}
                       onQuickAction={handleQuickAction}
                     />
@@ -251,11 +256,12 @@ export default function TasksPage() {
 interface TaskItemProps {
   lead: Lead;
   category: 'overdue' | 'due_today' | 'upcoming';
+  centers: Array<{ id: number; display_name: string }>;
   onView: () => void;
   onQuickAction: (lead: Lead, action: 'complete' | 'reschedule') => void;
 }
 
-function TaskItem({ lead, category, onView, onQuickAction }: TaskItemProps) {
+function TaskItem({ lead, category, centers, onView, onQuickAction }: TaskItemProps) {
   const getFollowupDate = () => {
     if (!lead.next_followup_date) return null;
     return typeof lead.next_followup_date === 'string' 
@@ -302,9 +308,9 @@ function TaskItem({ lead, category, onView, onQuickAction }: TaskItemProps) {
                 {format(followupDate, 'MMM dd, yyyy')}
               </div>
             )}
-            {lead.center?.display_name && (
+            {lead.center_id && centers.find(c => c.id === lead.center_id)?.display_name && (
               <div>
-                <span className="font-medium">🏢 Center:</span> {lead.center.display_name}
+                <span className="font-medium">🏢 Center:</span> {centers.find(c => c.id === lead.center_id)?.display_name}
               </div>
             )}
           </div>

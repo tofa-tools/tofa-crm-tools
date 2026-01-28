@@ -9,7 +9,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import { Edit2, UserX, UserCheck } from 'lucide-react';
 import toast from 'react-hot-toast';
-import type { User } from '@tofa/core';
+import type { User, UserRole } from '@tofa/core';
 
 export default function UsersPage() {
   const { user: currentUser } = useAuth();
@@ -25,7 +25,7 @@ export default function UsersPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
-  const [role, setRole] = useState('team_member');
+  const [role, setRole] = useState<UserRole>('team_member');
   const [selectedCenters, setSelectedCenters] = useState<number[]>([]);
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(true);
@@ -221,8 +221,7 @@ export default function UsersPage() {
       />
       <div className="p-8 space-y-6">
 
-        {/* Create/Edit User Form - Hidden for observers */}
-        {currentUser?.role !== 'observer' && (
+        {/* Create/Edit User Form - Only visible to team_lead */}
         <div ref={formRef} className="bg-white rounded-2xl shadow-xl p-6 border-t-4 border-tofa-gold">
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-semibold text-gray-900 font-bebas text-2xl">
@@ -288,7 +287,7 @@ export default function UsersPage() {
                   </label>
                   <select
                     value={role}
-                    onChange={(e) => setRole(e.target.value)}
+                    onChange={(e) => setRole(e.target.value as UserRole)}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
                   >
                     <option value="team_lead">Team Lead</option>
@@ -355,7 +354,6 @@ export default function UsersPage() {
             </form>
           )}
         </div>
-        )}
 
         {/* Staff Roster Table */}
         <div className="bg-white rounded-2xl shadow-xl overflow-hidden">
@@ -457,8 +455,8 @@ export default function UsersPage() {
                       {/* Actions Column */}
                       <td className="px-4 py-2 whitespace-nowrap">
                         <div className="flex items-center gap-2">
-                          {currentUser?.role !== 'observer' && (
-                            <>
+                          {/* Only team_lead can edit users (already enforced by early return) */}
+                          <>
                               <button
                                 onClick={() => handleEdit(user)}
                                 className="p-2 rounded-lg text-brand-accent hover:bg-brand-accent/10 transition-colors"
@@ -486,7 +484,6 @@ export default function UsersPage() {
                                 </button>
                               )}
                             </>
-                          )}
                         </div>
                       </td>
                     </tr>

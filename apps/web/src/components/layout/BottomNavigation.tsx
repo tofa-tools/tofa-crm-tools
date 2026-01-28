@@ -10,7 +10,7 @@ interface BottomNavItem {
   label: string;
   href?: string;
   icon: React.ComponentType<{ className?: string }>;
-  onClick?: () => void;
+  onClick?: (e?: React.MouseEvent) => void;
   isButton?: boolean;
 }
 
@@ -20,8 +20,8 @@ export function BottomNavigation() {
   const { logout, user } = useAuth();
 
   // Handle attendance navigation with batchId from localStorage
-  const handleAttendanceClick = (e: React.MouseEvent) => {
-    e.preventDefault();
+  const handleAttendanceClick = (e?: React.MouseEvent) => {
+    e?.preventDefault();
     if (typeof window !== 'undefined') {
       const lastBatchId = localStorage.getItem('lastSelectedBatchId');
       if (lastBatchId) {

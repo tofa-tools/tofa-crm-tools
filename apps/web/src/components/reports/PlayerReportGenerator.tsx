@@ -53,7 +53,7 @@ export function usePlayerReportGenerator() {
           </div>
           <div style="padding: 24px; background: rgba(255,255,255,0.95); height: calc(100% - 120px);">
             <div style="text-align: center; margin-bottom: 24px;">
-              <div style="font-size: 48px; font-weight: bold; color: #667eea; margin-bottom: 4px;">${((summary.average_technical_score + summary.average_fitness_score + summary.average_teamwork_score + summary.average_discipline_score) / 4).toFixed(1)}</div>
+              <div style="font-size: 48px; font-weight: bold; color: #667eea; margin-bottom: 4px;">${(((summary.average_technical_score ?? 0) + (summary.average_fitness_score ?? 0) + (summary.average_teamwork_score ?? 0) + (summary.average_discipline_score ?? 0)) / 4).toFixed(1)}</div>
               <div style="font-size: 12px; color: #666;">Overall Rating</div>
             </div>
             <div style="space-y: 16px;">

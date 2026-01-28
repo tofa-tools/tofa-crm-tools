@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { useAuth } from '@/context/AuthContext';
@@ -29,7 +29,7 @@ import {
   type AttendanceRecord
 } from '@tofa/core';
 
-export default function CheckInPage() {
+function CheckInPageContent() {
   const { user } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -224,7 +224,9 @@ export default function CheckInPage() {
     });
     
     // Trigger device call
-    window.location.href = `tel:${cleanPhone}`;
+    if (typeof window !== 'undefined') {
+      window.location.href = `tel:${cleanPhone}`;
+    }
   };
   
   const handleAttendanceClick = async (
@@ -355,10 +357,12 @@ export default function CheckInPage() {
             <div className="px-4 py-3 flex items-center justify-between">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-3 flex-wrap">
-                  <ArrowLeft 
+                  <button
                     onClick={handleBackToCommandCenter}
-                    className="h-5 w-5 cursor-pointer hover:text-tofa-gold transition-colors flex-shrink-0" 
-                  />
+                    className="h-5 w-5 cursor-pointer hover:text-tofa-gold transition-colors flex-shrink-0 flex items-center justify-center"
+                  >
+                    <ArrowLeft size={20} />
+                  </button>
                   {/* Small Logo */}
                   <div className="flex-shrink-0">
                     <Image
@@ -376,7 +380,7 @@ export default function CheckInPage() {
                     <div className="flex items-center gap-3 mt-0.5">
                       <span className="text-xs font-bold text-white/80">{selectedBatch.name}</span>
                       <div className="flex items-center gap-1.5 text-xs font-bold text-white/70">
-                        <Clock className="h-3.5 w-3.5" />
+                        <Clock size={14} />
                         <span>{formatTime(selectedBatch.start_time)}</span>
                       </div>
                       <span className="text-xs font-semibold text-white/70">{selectedBatch.age_category}</span>
@@ -385,14 +389,16 @@ export default function CheckInPage() {
                 </div>
               </div>
               <div className="ml-3 px-3 py-1.5 bg-tofa-gold/20 backdrop-blur-sm rounded-full border-2 border-tofa-gold/40 flex items-center gap-1.5 flex-shrink-0">
-                <Users className="h-4 w-4" />
+                <Users size={16} />
                 <span className="text-sm font-black">{attendanceSummary.total}</span>
               </div>
             </div>
             
             {/* Slim Search Bar - Pinned Below Header */}
             <div className="px-4 pb-2.5 relative">
-              <Search className="absolute left-7 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <div className="absolute left-7 top-1/2 -translate-y-1/2 text-gray-400">
+                <Search size={16} />
+              </div>
               <input
                 type="text"
                 placeholder="Search..."
@@ -455,7 +461,9 @@ export default function CheckInPage() {
             ) : filteredParticipants.length === 0 ? (
               <div className="flex-1 flex items-center justify-center py-12">
                 <div className="text-center">
-                  <Users className="h-12 w-12 text-gray-300 mx-auto mb-3" />
+                  <div className="h-12 w-12 text-gray-300 mx-auto mb-3">
+                    <Users size={48} />
+                  </div>
                   <p className="text-sm font-bold text-gray-600">
                     {searchTerm ? 'No participants found' : 'No participants assigned to this batch.'}
                   </p>
@@ -542,7 +550,7 @@ export default function CheckInPage() {
                                           ? `Last report: ${lastReportDate.toLocaleDateString()}`
                                           : 'No skill report yet'}
                                     >
-                                      <BarChart3 className="h-4 w-4" />
+                                      <BarChart3 size={16} />
                                     </button>
                                   );
                                 })()}
@@ -556,7 +564,7 @@ export default function CheckInPage() {
                                   className="p-1 rounded bg-red-100 text-red-600 hover:bg-red-200 transition-colors"
                                   title={`Call ${EMERGENCY_SUPPORT_CONFIG.SUPPORT_LABEL}`}
                                 >
-                                  <PhoneCall className="h-4 w-4" />
+                                  <PhoneCall size={16} />
                                 </button>
                                 
                                 {/* Type Badge */}
@@ -688,7 +696,7 @@ export default function CheckInPage() {
                         disabled={!allMarked || isSubmitting}
                         className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-blue-600 text-white font-black rounded-lg shadow-lg hover:from-indigo-700 hover:to-blue-700 active:scale-95 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed text-sm uppercase tracking-wide flex items-center gap-2"
                       >
-                        <CheckCircle2 className="h-4 w-4" />
+                        <CheckCircle2 size={16} />
                         {isSubmitting ? 'Submitting...' : 'Check-out'}
                       </button>
                     </div>
@@ -702,10 +710,12 @@ export default function CheckInPage() {
         {!selectedBatchId && !batchesLoading && (
           <div className="flex-1 flex items-center justify-center py-12">
             <div className="text-center">
-              <Users className="h-16 w-16 text-gray-300 mx-auto mb-4" />
+              <div className="h-16 w-16 text-gray-300 mx-auto mb-4">
+                <Users size={64} />
+              </div>
               <p className="text-sm font-bold text-gray-600 mb-1">Select a batch to mark attendance</p>
               {coachBatches.length === 0 && (
-                <p className="text-xs text-gray-500">You don't have any batches assigned yet.</p>
+                <p className="text-xs text-gray-500">You don&apos;t have any batches assigned yet.</p>
               )}
             </div>
           </div>
@@ -754,5 +764,20 @@ export default function CheckInPage() {
         )}
       </div>
     </MainLayout>
+  );
+}
+
+export default function CheckInPage() {
+  return (
+    <Suspense fallback={
+      <MainLayout>
+        <div className="flex flex-col items-center justify-center min-h-[400px]">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div>
+          <p className="mt-4 text-gray-600">Loading...</p>
+        </div>
+      </MainLayout>
+    }>
+      <CheckInPageContent />
+    </Suspense>
   );
 }

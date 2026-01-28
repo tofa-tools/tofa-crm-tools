@@ -449,7 +449,7 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
   const handleScheduleTrial = async () => {
     const validation = validateTrialScheduling(trialBatchId);
     if (!validation.isValid) {
-      toast.error(validation.error);
+      toast.error(validation.error || 'Validation failed');
       return;
     }
 
@@ -488,7 +488,7 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
     };
     const validation = validateJoiningComplete(joiningData);
     if (!validation.isValid) {
-      toast.error(validation.error);
+      toast.error(validation.error || 'Validation failed');
       return;
     }
 
@@ -661,7 +661,7 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
 
     const validation = validateReversalRequest(reversalReason);
     if (!validation.isValid) {
-      toast.error(validation.error);
+      toast.error(validation.error || 'Validation failed');
       return;
     }
 
@@ -823,7 +823,7 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
           {/* Coach Trial Feedback */}
           {coachTrialFeedback && (
             <div className="p-4 bg-purple-50 border-2 border-purple-200 rounded-2xl">
-              <p className="text-xs font-bold text-brand-primary uppercase tracking-widest mb-2">💡 Coach's Tip</p>
+              <p className="text-xs font-bold text-brand-primary uppercase tracking-widest mb-2">💡 Coach&apos;s Tip</p>
               <p className="text-sm text-gray-900">{coachTrialFeedback.note || ''}</p>
             </div>
           )}
@@ -1968,7 +1968,7 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                             
                             {latestReport.coach_note && (
                               <div className="bg-gray-50 p-2 sm:p-3 rounded-lg border border-gray-200 mb-3 sm:mb-0">
-                                <p className="text-[10px] sm:text-xs font-semibold text-gray-700 mb-1">Coach's Note</p>
+                                <p className="text-[10px] sm:text-xs font-semibold text-gray-700 mb-1">Coach&apos;s Note</p>
                                 <p className="text-xs sm:text-sm text-gray-800 italic leading-relaxed">"{latestReport.coach_note}"</p>
                               </div>
                             )}
@@ -2178,6 +2178,11 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                           const parentName = lead.email ? lead.email.split('@')[0] : 'Parent';
                           const playerName = lead.player_name;
                           const milestone = milestoneData.current_milestone;
+                          
+                          if (!milestone) {
+                            toast.error('Milestone data is missing');
+                            return;
+                          }
                           
                           // Determine ordinal suffix
                           const ordinalSuffix = (n: number) => {

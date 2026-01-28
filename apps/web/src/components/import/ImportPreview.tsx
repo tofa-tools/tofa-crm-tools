@@ -84,7 +84,7 @@ export function ImportPreview({ previewData, onConfirm, onCancel, isProcessing =
                 Map your CSV columns to the required fields:
               </p>
               {requiredColumns.map((requiredField) => {
-                const displayName = previewData.required_columns[requiredField] || requiredField;
+                const displayName = previewData.required_columns?.[requiredField] || requiredField;
                 return (
                   <div key={requiredField} className="flex items-center gap-4">
                     <label className="w-48 text-sm font-medium text-gray-700">

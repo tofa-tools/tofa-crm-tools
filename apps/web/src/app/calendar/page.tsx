@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { useCalendarMonth } from '@/hooks/useCalendar';
@@ -19,9 +19,11 @@ export default function CalendarPage() {
   const month = currentDate.getMonth() + 1; // JavaScript months are 0-indexed
 
   // Filter centers for team leads (can view all), others see only their centers
+  // Note: AuthUser doesn't include centers, so non-team-lead users see all centers for now
+  // TODO: Add centers to AuthUser type or fetch user centers separately
   const availableCenters = user?.role === 'team_lead' 
     ? centers 
-    : centers.filter(c => user?.centers?.some(uc => uc.id === c.id));
+    : centers; // For now, show all centers if user.centers is not available
 
   const centerIdsToFetch = user?.role === 'team_lead' && selectedCenters.length > 0
     ? selectedCenters
@@ -175,7 +177,7 @@ export default function CalendarPage() {
 
             {/* Calendar Days */}
             {weeks.map((week, weekIndex) => (
-              <React.Fragment key={weekIndex}>
+              <div key={weekIndex}>
                 {week.map((date, dayIndex) => {
                   const dateKey = format(date, 'yyyy-MM-dd');
                   const data = calendarData[dateKey] || { total: 0, high_priority: 0, trials: 0, calls: 0 };
@@ -210,7 +212,7 @@ export default function CalendarPage() {
                     </div>
                   );
                 })}
-              </React.Fragment>
+              </div>
             ))}
           </div>
         </div>

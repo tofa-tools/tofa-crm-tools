@@ -9,6 +9,7 @@ psycopg2-binary
 # Authentication
 python-jose[cryptography]
 passlib[bcrypt]
+bcrypt<4
 
 # File Processing
 pandas

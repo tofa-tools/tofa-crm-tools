@@ -184,7 +184,7 @@ export const leadsAPI = {
     return response.data;
   },
 
-  getLeadActivity: async (leadId: number, limit?: number): Promise<import('@/lib/schemas').AuditLog[]> => {
+  getLeadActivity: async (leadId: number, limit?: number): Promise<import('@tofa/core').AuditLog[]> => {
     const response = await apiClient.get(`/leads/${leadId}/activity`, {
       params: { limit },
     });
@@ -677,7 +677,7 @@ export const attendanceAPI = {
     batch_id: number;
     status: string;
     date?: string;
-    remarks?: string;
+    remarks?: string | null;
   }): Promise<{
     status: string;
     attendance_id: number;
@@ -685,7 +685,6 @@ export const attendanceAPI = {
     student_id?: number;
     batch_id: number;
     date: string;
-    status: string;
   }> => {
     const params = buildQueryParams({
       lead_id: data.lead_id,
@@ -693,7 +692,7 @@ export const attendanceAPI = {
       batch_id: data.batch_id,
       status: data.status,
       date: data.date,
-      remarks: data.remarks,
+      remarks: data.remarks ?? undefined, // Convert null to undefined
     });
 
     const response = await apiClient.post<{
@@ -702,7 +701,6 @@ export const attendanceAPI = {
       lead_id: number;
       batch_id: number;
       date: string;
-      status: string;
     }>('/attendance/check-in', null, { params });
     return response.data;
   },

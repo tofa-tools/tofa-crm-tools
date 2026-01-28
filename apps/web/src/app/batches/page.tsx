@@ -9,7 +9,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useBatches, useCreateBatch, useAssignCoachToBatch, useUpdateBatch, useDeleteBatch } from '@/hooks/useBatches';
 import { useUsers } from '@/hooks/useUsers';
 import { useCenters } from '@/hooks/useCenters';
-import { X, Plus, UserPlus, Edit, Trash2 } from 'lucide-react';
+import { X, Plus, Edit, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import type { BatchCreate } from '@tofa/core';
 import { formatDate } from '@/lib/utils';
@@ -294,8 +294,7 @@ export default function BatchesPage() {
               size="md"
               className="flex items-center gap-2"
             >
-              {/* @ts-expect-error - React types mismatch between lucide-react and @types/react */}
-              <Plus className="h-5 w-5" />
+              <Plus size={20} />
               Add New Batch
             </Button>
           )
@@ -434,8 +433,7 @@ export default function BatchesPage() {
                             onClick={() => handleEditBatch(batch.id)}
                             className="flex items-center gap-1 px-3 py-1 bg-brand-accent/20 text-brand-primary hover:bg-brand-accent/30 rounded-lg transition-colors text-sm font-medium"
                           >
-                            {/* @ts-expect-error - React types mismatch between lucide-react and @types/react */}
-                            <Edit className="h-4 w-4" />
+                            <Edit size={16} />
                             Edit
                           </button>
                         )}
@@ -460,8 +458,9 @@ export default function BatchesPage() {
                   className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                   aria-label="Close"
                 >
-                  {/* @ts-expect-error - React types mismatch between lucide-react and @types/react */}
-                  <X className="h-5 w-5 text-gray-500" />
+                  <div className="text-gray-500">
+                    <X size={20} />
+                  </div>
                 </button>
               </div>
 
@@ -706,8 +705,9 @@ export default function BatchesPage() {
                   className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                   aria-label="Close"
                 >
-                  {/* @ts-expect-error - React types mismatch between lucide-react and @types/react */}
-                  <X className="h-5 w-5 text-gray-500" />
+                  <div className="text-gray-500">
+                    <X size={20} />
+                  </div>
                 </button>
               </div>
 
@@ -795,8 +795,9 @@ export default function BatchesPage() {
                     className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                     aria-label="Close"
                   >
-                    {/* @ts-expect-error - React types mismatch between lucide-react and @types/react */}
-                    <X className="h-5 w-5 text-gray-500" />
+                    <div className="text-gray-500">
+                    <X size={20} />
+                  </div>
                   </button>
                 </div>
 
@@ -1051,8 +1052,9 @@ export default function BatchesPage() {
                   className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                   aria-label="Close"
                 >
-                  {/* @ts-expect-error - React types mismatch between lucide-react and @types/react */}
-                  <X className="h-5 w-5 text-gray-500" />
+                  <div className="text-gray-500">
+                    <X size={20} />
+                  </div>
                 </button>
               </div>
 

@@ -6,7 +6,7 @@ export async function register() {
 
   if (process.env.NEXT_RUNTIME === 'nodejs') {
     try {
-      await import('./instrumentation-server');
+      await import('./instrumentation-server' as string);
     } catch (error) {
       console.warn('Failed to load server instrumentation:', error);
     }
@@ -14,7 +14,7 @@ export async function register() {
 
   if (process.env.NEXT_RUNTIME === 'edge') {
     try {
-      await import('./instrumentation-edge');
+      await import('./instrumentation-edge' as string);
     } catch (error) {
       console.warn('Failed to load edge instrumentation:', error);
     }

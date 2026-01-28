@@ -146,7 +146,7 @@ export function ExecutiveDashboard({ executiveData }: ExecutiveDashboardProps) {
 
   // WhatsApp message handler
   const handleWhatsAppCoach = (coachName: string, batchName: string, coachPhone?: string | null) => {
-    const message = `Hi ${coachName}, our records show the ${batchName} session hasn't had attendance marked. Please update the system!`;
+    const message = `Hi ${coachName}, our records show the ${batchName} session hasn&apos;t had attendance marked. Please update the system!`;
     const encodedMessage = encodeURIComponent(message);
     
     if (coachPhone) {

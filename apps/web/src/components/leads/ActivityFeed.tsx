@@ -23,7 +23,7 @@ export function ActivityFeed({ leadId, comments = [] }: ActivityFeedProps) {
       id: string;
       type: 'audit' | 'comment';
       timestamp: string;
-      description: string | JSX.Element;
+      description: string | React.ReactNode;
       user?: { id: number; name: string; email?: string };
       icon: string;
       color: string;
@@ -34,7 +34,7 @@ export function ActivityFeed({ leadId, comments = [] }: ActivityFeedProps) {
 
     // Add audit logs
     auditLogs.forEach((log) => {
-      let description: string | JSX.Element = log.description || '';
+      let description: string | React.ReactNode = log.description || '';
       
       // If it's a comment_added action, highlight mentions in the comment text
       if (log.action_type === 'comment_added' && log.new_value) {
