@@ -1,0 +1,71 @@
+# Manual Google Cloud Build: Web — build (with API URL), push to Artifact Registry, deploy to Cloud Run
+# Run from repo root. Pass your API URL (use https:// in production):
+#   gcloud builds submit . --config=web-deploy.yaml --substitutions=_API_URL=https://api-xxxxx-asia-south1.run.app
+#
+# Substitutions:
+#   _API_URL    — Required. NEXT_PUBLIC_API_URL for the frontend (use https:// for production)
+#   _REGION     — Optional. Default asia-south1
+#   _REPO_NAME  — Optional. Default tofa-repo
+
+substitutions:
+  _API_URL: ''
+  _REGION: 'asia-south1'
+  _REPO_NAME: 'tofa-repo'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build'
+    args:
+      - 'build'
+      - '-f'
+      - 'Dockerfile.web'
+      - '--build-arg'
+      - 'NEXT_PUBLIC_API_URL=${_API_URL}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/web:latest'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push'
+    args:
+      - 'push'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/web:latest'
+    waitFor: ['build']
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'deploy'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'web'
+      - '--image'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/web:latest'
+      - '--platform'
+      - 'managed'
+      - '--region'
+      - '${_REGION}'
+      - '--project'
+      - '${PROJECT_ID}'
+      - '--allow-unauthenticated'
+      - '--port'
+      - '3000'
+      - '--memory'
+      - '512Mi'
+      - '--cpu'
+      - '1'
+      - '--min-instances'
+      - '0'
+      - '--max-instances'
+      - '10'
+      - '--timeout'
+      - '300'
+      - '--set-env-vars'
+      - 'NODE_ENV=production'
+    waitFor: ['push']
+
+images:
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/web:latest'

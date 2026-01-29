@@ -1,0 +1,51 @@
+# API — build, push to Artifact Registry, deploy to Cloud Run
+# Run from repo root: gcloud builds submit . --config=api-deploy.yaml
+#
+# DATABASE_URL is injected from Secret Manager (secret name DATABASE_URL, version latest).
+# Cloud Run runtime service account needs roles/secretmanager.secretAccessor on that secret.
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  # Step 1: Build the image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'Dockerfile.api'
+      - '-t'
+      - 'asia-south1-docker.pkg.dev/${PROJECT_ID}/tofa-repo/api:latest'
+      - '.'
+
+  # Step 2: Push to Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'asia-south1-docker.pkg.dev/${PROJECT_ID}/tofa-repo/api:latest'
+
+  # Step 3: Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'api'
+      - '--image'
+      - 'asia-south1-docker.pkg.dev/${PROJECT_ID}/tofa-repo/api:latest'
+      - '--region'
+      - 'asia-south1'
+      - '--platform'
+      - 'managed'
+      - '--project'
+      - '${PROJECT_ID}'
+      - '--allow-unauthenticated'
+      - '--port'
+      - '8080'
+      - '--update-secrets'
+      - 'DATABASE_URL=DATABASE_URL:latest'
+      - '--set-env-vars'
+      - 'PYTHONUNBUFFERED=1,PYTHONPATH=/app'
+
+images:
+  - 'asia-south1-docker.pkg.dev/${PROJECT_ID}/tofa-repo/api:latest'

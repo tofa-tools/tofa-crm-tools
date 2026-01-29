@@ -294,7 +294,6 @@ export default function BatchesPage() {
               size="md"
               className="flex items-center gap-2"
             >
-              {/* @ts-expect-error - React types mismatch between lucide-react and @types/react */}
               <Plus className="h-5 w-5" />
               Add New Batch
             </Button>

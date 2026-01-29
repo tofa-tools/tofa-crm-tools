@@ -29,13 +29,13 @@ if "user:password" in DATABASE_URL or ":port" in DATABASE_URL or "/database" in 
         "Please set actual database credentials in your .env file."
     )
 
-# Create engine with connection pool settings to handle stale connections
+# Create engine with connection pool settings for Supabase pooler (port 6543) and serverless (e.g. Cloud Run)
 engine = create_engine(
     DATABASE_URL,
-    pool_pre_ping=True,  # Verify connections before using them (handles stale connections)
+    pool_pre_ping=True,  # Most important for Cloud Run: verify connections before use (handles stale/disconnected)
     pool_recycle=3600,   # Recycle connections after 1 hour
-    pool_size=5,         # Number of connections to keep in pool
-    max_overflow=10      # Max connections that can be created beyond pool_size
+    pool_size=5,
+    max_overflow=10,
 )
 
 
