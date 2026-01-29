@@ -34,6 +34,7 @@ const montserrat = Montserrat({
 export const metadata: Metadata = {
   title: `${brandConfig.name} CRM`,
   description: `CRM system for ${brandConfig.name}`,
+  robots: 'noindex, nofollow',
 };
 
 export default function RootLayout({

@@ -21,3 +21,6 @@ requests
 
 # Error Tracking
 sentry-sdk[fastapi]
+
+# Rate Limiting
+slowapi

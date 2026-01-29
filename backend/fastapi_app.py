@@ -12,6 +12,9 @@ import pandas as pd
 from datetime import datetime
 import os
 import io
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # Sentry error tracking (optional)
 try:
@@ -117,6 +120,42 @@ async def get_current_user(
 
 app = FastAPI()
 
+# Rate limiting setup
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
+
+def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    """Return a clear 429 Too Many Requests response when rate limit is hit."""
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={
+            "detail": "Too many login attempts. Please try again in a minute.",
+            "error": "rate_limit_exceeded",
+        },
+    )
+
+
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
+# CORS middleware - Configure from environment variable with robust parsing
+# Parse CORS_ORIGINS: split by comma, strip whitespace, filter empty strings
+cors_origins_env = os.getenv('CORS_ORIGINS', '')
+if cors_origins_env:
+    origins = [o.strip() for o in cors_origins_env.split(',') if o.strip()]
+else:
+    # Fallback to ["*"] if environment variable is missing (for now, to get login working)
+    origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
+
 # Middleware to block observers from mutation operations
 @app.middleware("http")
 async def observer_read_only_middleware(request: Request, call_next):
@@ -158,16 +197,6 @@ async def observer_read_only_middleware(request: Request, call_next):
     
     return await call_next(request)
 
-# CORS middleware - Allow React app to make requests
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # React dev server
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 # Initialize database on startup
 @app.on_event("startup")
 def on_startup():
@@ -176,11 +205,13 @@ def on_startup():
 
 # --- AUTHENTICATION ENDPOINTS ---
 @app.post("/token")
+@limiter.limit("5/minute")
 async def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_session)
 ):
-    """Login endpoint - returns JWT token."""
+    """Login endpoint - returns JWT token. Rate limited to 5 attempts per minute per IP."""
     try:
         user = verify_user_credentials(db, form_data.username, form_data.password)
         if not user:

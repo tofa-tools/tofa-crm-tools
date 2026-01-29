@@ -1,0 +1,85 @@
+# Stage 1: Dependencies
+FROM node:20-alpine AS deps
+WORKDIR /app
+
+# Copy root package files for monorepo setup
+COPY package.json package-lock.json turbo.json ./
+COPY packages/core ./packages/core
+COPY apps/web ./apps/web
+
+# Install dependencies
+RUN npm ci
+
+# Stage 2: Builder
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+# Copy package files and source code
+COPY --from=deps /app/package.json ./package.json
+COPY --from=deps /app/package-lock.json ./package-lock.json
+COPY --from=deps /app/turbo.json ./turbo.json
+COPY packages/core ./packages/core
+COPY apps/web ./apps/web
+
+# Install dependencies fresh in builder to ensure workspace linking works
+# This is necessary because copying node_modules can break workspace symlinks
+RUN npm ci
+
+# Explicitly install required packages for Next.js standalone mode
+RUN npm install styled-jsx @swc/helpers @next/env
+
+# Build-time API URL (Next.js bakes NEXT_PUBLIC_* into the client bundle)
+ARG NEXT_PUBLIC_API_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
+# Build the application
+RUN npx turbo run build --filter=./apps/web
+
+# Stage 3: Runner
+FROM node:20-alpine AS runner
+WORKDIR /app
+
+# Install wget for health checks
+RUN apk add --no-cache wget
+
+# Set environment variables explicitly
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+# Copy standalone output from builder
+# Next.js standalone output structure - copy the entire standalone directory
+COPY --from=builder /app/apps/web/.next/standalone ./
+
+# Copy static assets to ROOT .next folder (for browser requests to /_next/static/)
+# This is where Next.js serves static assets from
+COPY --from=builder /app/apps/web/.next/static ./.next/static
+
+# Copy static assets to workspace path (for server internal references)
+# Next.js standalone mode also expects them at the workspace path
+COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
+
+# Copy public folder to both locations:
+# 1. Root public folder - where Next.js serves /logo.png, /favicon.ico, etc.
+# 2. Workspace path - for server internal references
+COPY --from=builder /app/apps/web/public ./public
+COPY --from=builder /app/apps/web/public ./apps/web/public
+
+# Ensure required modules are available in standalone node_modules
+# Copy from builder's node_modules to runner's standalone node_modules
+# This is required for Next.js standalone mode
+COPY --from=builder /app/node_modules/styled-jsx ./node_modules/styled-jsx
+# Copy @swc and all its sub-packages (including @swc/helpers)
+COPY --from=builder /app/node_modules/@swc ./node_modules/@swc
+# Copy @next/env which is required by Next.js server
+COPY --from=builder /app/node_modules/@next/env ./node_modules/@next/env
+# Copy sharp for image optimization (required for Next.js image optimization)
+COPY --from=builder /app/node_modules/sharp ./node_modules/sharp
+
+# Expose port
+EXPOSE 3000
+
+# Start the application
+# Check if server.js is at root or apps/web/server.js
+# Try root first, fallback to apps/web/server.js if needed
+CMD ["sh", "-c", "if [ -f server.js ]; then node server.js; elif [ -f apps/web/server.js ]; then node apps/web/server.js; else echo 'Error: server.js not found'; exit 1; fi"]
