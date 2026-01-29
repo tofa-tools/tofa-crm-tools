@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { useAuth } from '@/context/AuthContext';
@@ -29,7 +29,7 @@ import {
   type AttendanceRecord
 } from '@tofa/core';
 
-export default function CheckInPage() {
+function CheckInPageContent() {
   const { user } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -223,8 +223,10 @@ export default function CheckInPage() {
       },
     });
     
-    // Trigger device call
-    window.location.href = `tel:${cleanPhone}`;
+    // Trigger device call (client-only)
+    if (typeof window !== 'undefined') {
+      window.location.href = `tel:${cleanPhone}`;
+    }
   };
   
   const handleAttendanceClick = async (
@@ -754,5 +756,13 @@ export default function CheckInPage() {
         )}
       </div>
     </MainLayout>
+  );
+}
+
+export default function CheckInPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <CheckInPageContent />
+    </Suspense>
   );
 }

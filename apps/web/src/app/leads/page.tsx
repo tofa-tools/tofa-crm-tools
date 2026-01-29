@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -25,7 +25,7 @@ import { stagingAPI } from '@/lib/api';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Search, Calendar, Ghost, ArrowUp, ArrowDown, ChevronUp, ChevronDown, Plus } from 'lucide-react';
 
-export default function LeadsPage() {
+function LeadsPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
@@ -467,7 +467,7 @@ export default function LeadsPage() {
         onClose={() => setIsPlannerOpen(false)}
         selectedDate={nextFollowupDateFilter}
         onDateSelect={(d) => updateURLParams({ next_follow_up_date: d })}
-        onLeadClick={(id) => { setExpandedLeadId(id); if (window.innerWidth < 768) setIsPlannerOpen(false); }}
+        onLeadClick={(id) => { setExpandedLeadId(id); if (typeof window !== 'undefined' && window.innerWidth < 768) setIsPlannerOpen(false); }}
       />
 
       {/* Lead Update Modal */}
@@ -485,5 +485,13 @@ export default function LeadsPage() {
       <CreateLeadModal isOpen={showCreateLeadModal} onClose={() => setShowCreateLeadModal(false)} />
       </div>
     </MainLayout>
+  );
+}
+
+export default function LeadsPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <LeadsPageContent />
+    </Suspense>
   );
 }
