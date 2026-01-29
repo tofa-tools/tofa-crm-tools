@@ -1,13 +1,18 @@
 # Cloud Build: Web app — build (with NEXT_PUBLIC_API_URL), push to Artifact Registry, deploy to Cloud Run
 # Run from repo root: gcloud builds submit . --config=apps/web/cloudbuild.yaml
 #
-# Pass the API URL at build time (required for Next.js client bundle):
-#   gcloud builds submit . --config=apps/web/cloudbuild.yaml --substitutions=_NEXT_PUBLIC_API_URL=https://api-xxx.run.app
+# Pass the API URL at build time (required for Next.js client bundle).
+# IMPORTANT: Use https:// in production to avoid Mixed Content errors.
+#   Right: --substitutions=_NEXT_PUBLIC_API_URL=https://api-xxxxx-asia-south1.run.app
+#   Wrong: http://api-xxxxx... (do not use http for production)
+#
+# Example:
+#   gcloud builds submit . --config=apps/web/cloudbuild.yaml --substitutions=_NEXT_PUBLIC_API_URL=https://api-xxxxx-asia-south1.run.app
 #
 # Substitution variables (optional):
 #   _REGION                 — e.g. asia-south1 (default below)
 #   _REPO_NAME              — Artifact Registry repo name (default: tofa-repo)
-#   _NEXT_PUBLIC_API_URL    — Public API URL for the frontend (must be set for production)
+#   _NEXT_PUBLIC_API_URL    — Public API URL; must be https:// in production
 
 substitutions:
   _REGION: 'asia-south1'

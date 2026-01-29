@@ -59,10 +59,10 @@ COPY --from=builder /app/apps/web/.next/static ./.next/static
 # Next.js standalone mode also expects them at the workspace path
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
 
-# Copy public folder to both locations:
-# 1. Root public folder - where Next.js serves /logo.png, /favicon.ico, etc.
-# 2. Workspace path - for server internal references
+# Copy public folder so browser can find favicon.ico and logo.png at root
+# 1. Root public — Next.js serves /favicon.ico, /logo.png, /robots.txt from here
 COPY --from=builder /app/apps/web/public ./public
+# 2. Workspace path — server internal references (standalone may resolve from apps/web)
 COPY --from=builder /app/apps/web/public ./apps/web/public
 
 # Ensure required modules are available in standalone node_modules

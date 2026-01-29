@@ -1,6 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  // Serve favicon at root so /favicon.ico does not 404 (uses logo.png if favicon.ico missing)
+  async rewrites() {
+    return [{ source: '/favicon.ico', destination: '/logo.png' }];
+  },
   experimental: {
     // Only enable instrumentation hook if Sentry is configured
     instrumentationHook: !!process.env.NEXT_PUBLIC_SENTRY_DSN,

@@ -21,7 +21,16 @@ import { createTokenStorage } from '@/lib/storage';
 import { createNavigationHandler } from '@/lib/navigation';
 import { StandardErrorHandler } from '@/lib/api/ErrorHandler';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+// Force HTTPS in production to avoid Mixed Content (API must use https when site is https)
+const rawApiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+const API_URL =
+  process.env.NODE_ENV === 'production'
+    ? rawApiUrl.replace(/^http:\/\//i, 'https://')
+    : rawApiUrl;
+
+if (process.env.NODE_ENV !== 'production') {
+  console.log('[api] baseURL:', API_URL);
+}
 
 // Create platform-specific instances
 const tokenStorage = createTokenStorage();

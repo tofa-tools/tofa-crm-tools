@@ -35,6 +35,7 @@ export const metadata: Metadata = {
   title: `${brandConfig.name} CRM`,
   description: `CRM system for ${brandConfig.name}`,
   robots: 'noindex, nofollow',
+  icons: { icon: '/logo.png' },
 };
 
 export default function RootLayout({
