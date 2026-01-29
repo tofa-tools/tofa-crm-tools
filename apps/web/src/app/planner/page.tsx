@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, Suspense } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { MetricCard } from '@/components/ui/MetricCard';
@@ -12,10 +12,9 @@ import { useLeads } from '@/hooks/useLeads';
 import { useUpdateLead } from '@/hooks/useLeads';
 import { useAbandonedCount } from '@/hooks/useAnalytics';
 import { useQueryClient } from '@tanstack/react-query';
-import { format } from 'date-fns';
 import type { LeadStatus } from '@tofa/core';
 
-export default function PlannerPage() {
+function PlannerContent() {
   const queryClient = useQueryClient();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<string>(
@@ -139,3 +138,10 @@ export default function PlannerPage() {
   );
 }
 
+export default function PlannerPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center text-brand-primary font-bebas">Loading...</div>}>
+      <PlannerContent />
+    </Suspense>
+  );
+}

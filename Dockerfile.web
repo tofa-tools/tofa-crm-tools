@@ -47,33 +47,15 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
-# Copy standalone output from builder
-# Next.js standalone output structure - copy the entire standalone directory
+# Copy the standalone build (which includes the root server.js)
 COPY --from=builder /app/apps/web/.next/standalone ./
 
-# Copy static assets: root (browser /_next/static/) and workspace path (server resolution)
-COPY --from=builder /app/apps/web/.next/static ./.next/static
+# Copy the static and public assets into the correct subfolder
 COPY --from=builder /app/apps/web/.next/static ./apps/web/.next/static
-
-# Copy public folder so favicon, logo.png, robots.txt are available in the container
-COPY --from=builder /app/apps/web/public ./public
 COPY --from=builder /app/apps/web/public ./apps/web/public
-
-# Ensure required modules are available in standalone node_modules
-# Copy from builder's node_modules to runner's standalone node_modules
-# This is required for Next.js standalone mode
-COPY --from=builder /app/node_modules/styled-jsx ./node_modules/styled-jsx
-# Copy @swc and all its sub-packages (including @swc/helpers)
-COPY --from=builder /app/node_modules/@swc ./node_modules/@swc
-# Copy @next/env which is required by Next.js server
-COPY --from=builder /app/node_modules/@next/env ./node_modules/@next/env
-# Copy sharp for image optimization (required for Next.js image optimization)
-COPY --from=builder /app/node_modules/sharp ./node_modules/sharp
 
 # Expose port
 EXPOSE 3000
 
-# Start the application
-# Check if server.js is at root or apps/web/server.js
-# Try root first, fallback to apps/web/server.js if needed
-CMD ["sh", "-c", "if [ -f server.js ]; then node server.js; elif [ -f apps/web/server.js ]; then node apps/web/server.js; else echo 'Error: server.js not found'; exit 1; fi"]
+# Start the application (root server.js routes to internal apps/web paths)
+CMD ["node", "server.js"]

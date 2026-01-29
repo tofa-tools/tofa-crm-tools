@@ -35,6 +35,14 @@ export default function CoachPlayersPage() {
   const router = useRouter();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedStudent, setSelectedStudent] = useState<{ leadId: number; name: string; studentId?: number } | null>(null);
+  const [shouldReload, setShouldReload] = useState(false);
+
+  // Reload page after skill report success (runs in browser only)
+  useEffect(() => {
+    if (shouldReload && typeof window !== 'undefined') {
+      window.location.reload();
+    }
+  }, [shouldReload]);
 
   // Fetch coach's batches
   const { data: coachBatchesData, isLoading: batchesLoading } = useCoachBatches();
@@ -446,10 +454,7 @@ export default function CoachPlayersPage() {
           onClose={() => setSelectedStudent(null)}
           leadId={selectedStudent.leadId}
           playerName={selectedStudent.name}
-          onSuccess={() => {
-            // Refresh data
-            window.location.reload();
-          }}
+          onSuccess={() => setShouldReload(true)}
         />
       )}
     </MainLayout>

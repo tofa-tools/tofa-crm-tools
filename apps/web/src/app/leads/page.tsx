@@ -25,7 +25,7 @@ import { stagingAPI } from '@/lib/api';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Search, Calendar, Ghost, ArrowUp, ArrowDown, ChevronUp, ChevronDown, Plus } from 'lucide-react';
 
-function LeadsPageContent() {
+function LeadsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const queryClient = useQueryClient();
@@ -491,7 +491,7 @@ function LeadsPageContent() {
 export default function LeadsPage() {
   return (
     <Suspense fallback={<div>Loading...</div>}>
-      <LeadsPageContent />
+      <LeadsContent />
     </Suspense>
   );
 }

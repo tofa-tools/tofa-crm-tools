@@ -29,7 +29,7 @@ import {
   type AttendanceRecord
 } from '@tofa/core';
 
-function CheckInPageContent() {
+function CheckInContent() {
   const { user } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -762,7 +762,7 @@ function CheckInPageContent() {
 export default function CheckInPage() {
   return (
     <Suspense fallback={<div>Loading...</div>}>
-      <CheckInPageContent />
+      <CheckInContent />
     </Suspense>
   );
 }

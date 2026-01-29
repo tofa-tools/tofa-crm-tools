@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { MainLayout } from '@/components/layout/MainLayout';
+import { PageHeader } from '@/components/ui/PageHeader';
 import { useDailyQueue, useDailyStats } from '@/hooks/useTasks';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { FreshnessIndicator } from '@/components/ui/FreshnessIndicator';
