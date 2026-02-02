@@ -16,6 +16,7 @@ options:
   logging: CLOUD_LOGGING_ONLY
 
 steps:
+  # Build web image with API URL baked in (must be https:// in production to avoid Mixed Content)
   - name: 'gcr.io/cloud-builders/docker'
     id: 'build'
     args:

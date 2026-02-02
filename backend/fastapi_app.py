@@ -82,13 +82,18 @@ from backend.core.reactivations import get_potential_reactivations
 from backend.core.attendance import record_attendance, get_attendance_history
 from backend.core.approvals import (
     create_request, get_pending_requests, get_request_by_id,
-    resolve_request, get_requests_for_lead
+    resolve_request, get_requests_for_lead,
+    create_age_category_request, get_pending_age_category_requests,
+    resolve_age_category_request, get_age_category_requests_for_lead,
 )
 from backend.core.students import get_all_students, get_student_by_lead_id
 from backend.schemas.leads import LeadPreferencesRead, LeadPreferencesUpdate
 from backend.models import User, Center, Lead, Student
 from backend.schemas.users import UserCreateSchema, UserUpdateSchema
 from backend.schemas.bulk import BulkUpdateStatusRequest, BulkAssignCenterRequest
+
+# Age categories must match @tofa/core AGE_CATEGORIES for consistency
+ALLOWED_AGE_CATEGORIES = frozenset({"U5", "U7", "U9", "U11", "U13", "U15", "U17", "Senior"})
 
 # FastAPI OAuth2 scheme for token extraction
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -118,7 +123,25 @@ async def get_current_user(
     
     return user
 
-app = FastAPI()
+app = FastAPI(redirect_slashes=False)
+
+# CORS: locked-down list; extend from CORS_ORIGINS env if set
+origins = [
+    "https://web-ol2p4uejfa-el.a.run.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+cors_origins_env = os.getenv("CORS_ORIGINS", "").strip()
+if cors_origins_env:
+    origins = list(origins) + [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    expose_headers=["*"],
+)
 
 # Rate limiting setup
 limiter = Limiter(key_func=get_remote_address)
@@ -138,23 +161,14 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
 
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
-# CORS middleware - Configure from environment variable with robust parsing
-# Parse CORS_ORIGINS: split by comma, strip whitespace, filter empty strings
-cors_origins_env = os.getenv('CORS_ORIGINS', '')
-if cors_origins_env:
-    origins = [o.strip() for o in cors_origins_env.split(',') if o.strip()]
-else:
-    # Fallback to ["*"] if environment variable is missing (for now, to get login working)
-    origins = ["*"]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-)
+# Proxy/HTTPS middleware - when behind Cloud Run (or similar), use X-Forwarded-Proto so redirects stay on https
+@app.middleware("http")
+async def proxy_headers_middleware(request: Request, call_next):
+    """Force scheme to https when the client connected via https (e.g. behind Cloud Run). Prevents Mixed Content from 307 redirects."""
+    forwarded_proto = request.headers.get("x-forwarded-proto")
+    if forwarded_proto and forwarded_proto.lower() == "https":
+        request.scope["scheme"] = "https"
+    return await call_next(request)
 
 # Middleware to block observers from mutation operations
 @app.middleware("http")
@@ -174,7 +188,7 @@ async def observer_read_only_middleware(request: Request, call_next):
         try:
             from backend.core.auth import get_user_email_from_token
             from backend.core.users import get_user_by_email
-            from backend.database import get_session
+            from backend.core.db import get_session
             
             email = get_user_email_from_token(token)
             if email:
@@ -201,6 +215,7 @@ async def observer_read_only_middleware(request: Request, call_next):
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()
+    print("API Security: Allowing requests from:", origins)
 
 
 # --- AUTHENTICATION ENDPOINTS ---
@@ -215,10 +230,13 @@ async def login(
     try:
         user = verify_user_credentials(db, form_data.username, form_data.password)
         if not user:
-            raise HTTPException(status_code=400, detail="Incorrect email or password")
+            raise HTTPException(status_code=401, detail="Incorrect email or password")
     except ValueError as e:
-        # Handle deactivated account error
-        raise HTTPException(status_code=401, detail=str(e))
+        # Deactivated account: show message. Passlib/bcrypt errors: never leak to client.
+        msg = str(e)
+        if "72 bytes" in msg or "password" in msg.lower() and "truncate" in msg.lower():
+            msg = "Incorrect email or password"
+        raise HTTPException(status_code=401, detail=msg)
     
     access_token = create_access_token(data={"sub": user.email})
     return {
@@ -1663,6 +1681,7 @@ async def promote_staging_lead_endpoint(
     player_age_category: str = Body(...),
     email: Optional[str] = Body(None),
     address: Optional[str] = Body(None),
+    date_of_birth: Optional[str] = Body(None),
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
@@ -1674,17 +1693,30 @@ async def promote_staging_lead_endpoint(
         player_age_category: Required age category (e.g., 'U9', 'U11')
         email: Optional email address (overrides staging email if provided)
         address: Optional address
+        date_of_birth: Optional date of birth (YYYY-MM-DD)
     """
     if current_user.role not in ["team_lead", "team_member"]:
         raise HTTPException(status_code=403, detail="Only Team Leads and Team Members can promote staging leads")
-    
+    if player_age_category not in ALLOWED_AGE_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid age category. Allowed: {', '.join(sorted(ALLOWED_AGE_CATEGORIES))}",
+        )
     try:
+        from datetime import date as date_type
+        dob_parsed = None
+        if date_of_birth:
+            try:
+                dob_parsed = date_type.fromisoformat(date_of_birth)
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail="date_of_birth must be YYYY-MM-DD")
         lead = promote_staging_lead(
             db=db,
             staging_id=staging_id,
             player_age_category=player_age_category,
             email=email,
             address=address,
+            date_of_birth=dob_parsed,
             user_id=current_user.id
         )
         return lead
@@ -1700,6 +1732,7 @@ async def create_lead_endpoint(
     phone: str = Body(...),
     email: Optional[str] = Body(None),
     address: Optional[str] = Body(None),
+    date_of_birth: Optional[str] = Body(None),
     center_id: int = Body(...),
     status: str = Body("New"),
     db: Session = Depends(get_session),
@@ -1715,18 +1748,23 @@ async def create_lead_endpoint(
         phone: Phone number
         email: Optional email address
         address: Optional address
+        date_of_birth: Optional date of birth (YYYY-MM-DD)
         center_id: Center ID
         status: Lead status (default: 'New')
     """
     if current_user.role != "team_lead":
         raise HTTPException(status_code=403, detail="Only Team Leads can create leads directly")
-    
+    if player_age_category not in ALLOWED_AGE_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid age category. Allowed: {', '.join(sorted(ALLOWED_AGE_CATEGORIES))}",
+        )
     # Check for duplicates
     if check_duplicate_lead(db, player_name, phone):
         raise HTTPException(status_code=400, detail="A lead with this name and phone number already exists")
     
     try:
-        from datetime import timedelta
+        from datetime import timedelta, date as date_type
         from backend.models import Lead
         import uuid
         
@@ -1734,6 +1772,14 @@ async def create_lead_endpoint(
         center = db.get(Center, center_id)
         if not center:
             raise HTTPException(status_code=400, detail=f"Center {center_id} not found")
+        
+        # Parse optional date_of_birth
+        dob_parsed = None
+        if date_of_birth:
+            try:
+                dob_parsed = date_type.fromisoformat(date_of_birth)
+            except (ValueError, TypeError):
+                raise HTTPException(status_code=400, detail="date_of_birth must be YYYY-MM-DD")
         
         # Create lead
         initial_followup = datetime.utcnow() + timedelta(hours=24)
@@ -1744,6 +1790,7 @@ async def create_lead_endpoint(
             phone=phone,
             email=email,
             address=address,
+            date_of_birth=dob_parsed,
             center_id=center_id,
             status=status,
             public_token=str(uuid.uuid4()),
@@ -2331,25 +2378,64 @@ def create_status_change_request_endpoint(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/approvals/request-age-category")
+def create_age_category_request_endpoint(
+    lead_id: int,
+    requested_category: str,
+    reason: Optional[str] = None,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Submit an age category change request (team members only)."""
+    try:
+        req = create_age_category_request(
+            db=db,
+            lead_id=lead_id,
+            requested_by_id=current_user.id,
+            requested_category=requested_category,
+            reason=reason,
+        )
+        return {"status": "success", "message": "Age category change request submitted for approval", "request_id": req.id}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/approvals/age-category/{request_id}/resolve")
+def resolve_age_category_request_endpoint(
+    request_id: int,
+    approved: bool,
+    resolution_note: Optional[str] = None,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Approve or reject an age category change request (team leads only)."""
+    if current_user.role != "team_lead":
+        raise HTTPException(status_code=403, detail="Only team leads can resolve age category requests")
+    try:
+        req = resolve_age_category_request(db=db, request_id=request_id, resolved_by_id=current_user.id, approved=approved, resolution_note=resolution_note)
+        return {"status": "success", "message": f"Request {'approved' if approved else 'rejected'}", "request": {"id": req.id, "request_status": req.request_status}}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.get("/approvals/pending")
 def get_pending_requests_endpoint(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Get all pending status change requests (team leads only)."""
+    """Get all pending status change and age category change requests (team leads only)."""
     if current_user.role != "team_lead":
         raise HTTPException(status_code=403, detail="Only team leads can view pending requests")
     
     requests = get_pending_requests(db)
-    
-    # Format response with lead and user details
+    age_cat_requests = get_pending_age_category_requests(db)
     formatted_requests = []
     for req in requests:
         lead = db.get(Lead, req.lead_id)
         requester = db.get(User, req.requested_by_id)
-        
         formatted_requests.append({
             "id": req.id,
+            "type": "status",
             "lead_id": req.lead_id,
             "lead_name": lead.player_name if lead else "Unknown",
             "requested_by_id": req.requested_by_id,
@@ -2360,7 +2446,23 @@ def get_pending_requests_endpoint(
             "request_status": req.request_status,
             "created_at": req.created_at.isoformat() if req.created_at else None,
         })
-    
+    for req in age_cat_requests:
+        lead = db.get(Lead, req.lead_id)
+        requester = db.get(User, req.requested_by_id)
+        formatted_requests.append({
+            "id": req.id,
+            "type": "age_category",
+            "lead_id": req.lead_id,
+            "lead_name": lead.player_name if lead else "Unknown",
+            "requested_by_id": req.requested_by_id,
+            "requested_by_name": requester.full_name if requester else "Unknown",
+            "current_status": req.current_category,
+            "requested_status": req.requested_category,
+            "reason": req.reason,
+            "request_status": req.request_status,
+            "created_at": req.created_at.isoformat() if req.created_at else None,
+        })
+    formatted_requests.sort(key=lambda x: x.get("created_at") or "", reverse=True)
     return {"requests": formatted_requests, "count": len(formatted_requests)}
 
 
@@ -2403,16 +2505,16 @@ def get_lead_requests_endpoint(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Get all status change requests for a specific lead."""
+    """Get all status change and age category change requests for a specific lead."""
     requests = get_requests_for_lead(db, lead_id)
-    
+    age_cat_requests = get_age_category_requests_for_lead(db, lead_id)
     formatted_requests = []
     for req in requests:
         requester = db.get(User, req.requested_by_id)
         resolver = db.get(User, req.resolved_by_id) if req.resolved_by_id else None
-        
         formatted_requests.append({
             "id": req.id,
+            "type": "status",
             "current_status": req.current_status,
             "requested_status": req.requested_status,
             "reason": req.reason,
@@ -2422,7 +2524,22 @@ def get_lead_requests_endpoint(
             "created_at": req.created_at.isoformat() if req.created_at else None,
             "resolved_at": req.resolved_at.isoformat() if req.resolved_at else None,
         })
-    
+    for req in age_cat_requests:
+        requester = db.get(User, req.requested_by_id)
+        resolver = db.get(User, req.resolved_by_id) if req.resolved_by_id else None
+        formatted_requests.append({
+            "id": req.id,
+            "type": "age_category",
+            "current_status": req.current_category,
+            "requested_status": req.requested_category,
+            "reason": req.reason,
+            "request_status": req.request_status,
+            "requested_by_name": requester.full_name if requester else "Unknown",
+            "resolved_by_name": resolver.full_name if resolver else None,
+            "created_at": req.created_at.isoformat() if req.created_at else None,
+            "resolved_at": req.resolved_at.isoformat() if req.resolved_at else None,
+        })
+    formatted_requests.sort(key=lambda x: x.get("created_at") or "", reverse=True)
     return {"requests": formatted_requests}
 
 

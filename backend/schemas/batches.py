@@ -10,7 +10,7 @@ class BatchCreate(BaseModel):
     """Schema for creating a new batch."""
     name: str
     center_id: int
-    age_category: str  # e.g., 'U9', 'U11'
+    age_category: str  # Comma-separated list, e.g. 'U9' or 'U7,U9' for multi-age
     max_capacity: int = 20
     
     # Seven-Boolean Schedule
@@ -34,11 +34,11 @@ class BatchCreate(BaseModel):
 
 
 class BatchRead(BaseModel):
-    """Schema for reading batch data."""
+    """Schema for reading batch data. age_category is comma-separated (e.g. 'U9' or 'U7,U9')."""
     id: int
     name: str
     center_id: int
-    age_category: str
+    age_category: str  # Comma-separated list of allowed categories
     max_capacity: int
     
     # Seven-Boolean Schedule
@@ -68,7 +68,7 @@ class BatchUpdate(BaseModel):
     """Schema for updating a batch."""
     name: Optional[str] = None
     center_id: Optional[int] = None
-    age_category: Optional[str] = None
+    age_category: Optional[str] = None  # Comma-separated list for multi-age
     max_capacity: Optional[int] = None
     
     # Seven-Boolean Schedule

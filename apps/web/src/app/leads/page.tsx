@@ -23,7 +23,7 @@ import { StagingLeadsModal } from '@/components/leads/StagingLeadsModal';
 import { CreateLeadModal } from '@/components/leads/CreateLeadModal';
 import { stagingAPI } from '@/lib/api';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Search, Calendar, Ghost, ArrowUp, ArrowDown, ChevronUp, ChevronDown, Plus } from 'lucide-react';
+import { Search, Calendar, Ghost, ArrowUp, ArrowDown, ChevronUp, ChevronDown, Plus, AlertTriangle } from 'lucide-react';
 
 function LeadsContent() {
   const router = useRouter();
@@ -115,8 +115,9 @@ function LeadsContent() {
         subscription_plan: student.subscription_plan,
         subscription_end_date: student.subscription_end_date,
         student_batch_ids: student.student_batch_ids || [],
+        date_of_birth: student.lead_date_of_birth ?? null,
         // Add other required Lead fields with defaults
-        player_age_category: '',
+        player_age_category: student.lead_player_age_category ?? '',
         phone: '',
         email: null,
         address: null,
@@ -416,7 +417,19 @@ function LeadsContent() {
                         setSelectedLeadIds(next);
                       }} className="rounded border-gray-300 text-brand-accent" />
                     </td>
-                    <td className="px-6 py-4 text-sm font-bold text-gray-900">{lead.player_name}</td>
+                    <td className="px-6 py-4 text-sm font-bold text-gray-900">
+                      <span className="inline-flex items-center gap-1.5">
+                        {lead.player_name}
+                        {lead.date_of_birth == null && (
+                          <span
+                            className="inline-flex text-red-500"
+                            title="⚠️ Missing DOB: Age migration alerts are disabled"
+                          >
+                            <AlertTriangle className="h-4 w-4" aria-hidden />
+                          </span>
+                        )}
+                      </span>
+                    </td>
                     <td className="px-6 py-4 text-sm text-gray-500 font-medium">
                       {centers.find(c => c.id === lead.center_id)?.display_name || '—'}
                     </td>

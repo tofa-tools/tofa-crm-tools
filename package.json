@@ -12,8 +12,11 @@
     "build": "turbo run build",
     "lint": "turbo run lint",
     "clean": "turbo run clean",
-    "mobile:start": "cd apps/mobile && npx expo start",
-    "mobile:start:clear": "cd apps/mobile && npx expo start --clear"
+    "android": "cd apps/mobile && npx react-native run-android",
+    "ios": "cd apps/mobile && npx react-native run-ios",
+    "mobile:start": "cd apps/mobile && npm run start",
+    "mobile:android": "cd apps/mobile && npx react-native run-android",
+    "mobile:ios": "cd apps/mobile && npx react-native run-ios"
   },
   "devDependencies": {
     "turbo": "^2.0.0"

@@ -14,6 +14,7 @@ import { formatDate } from '@/lib/utils';
 
 interface ApprovalRequest {
   id: number;
+  type?: 'status' | 'age_category';
   lead_id: number;
   lead_name: string;
   requested_by_name: string;
@@ -43,12 +44,11 @@ export default function ApprovalsPage() {
     refetchInterval: 30000, // Refetch every 30 seconds
   });
 
-  // Resolve request mutation
-  const resolveMutation = useMutation({
+  const resolveStatusMutation = useMutation({
     mutationFn: ({ requestId, approved }: { requestId: number; approved: boolean }) =>
       approvalsAPI.resolveRequest(requestId, approved),
-    onSuccess: (data, variables) => {
-      toast.success(data.message);
+    onSuccess: () => {
+      toast.success('Request resolved');
       queryClient.invalidateQueries({ queryKey: ['approvals'] });
       queryClient.invalidateQueries({ queryKey: ['leads'] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
@@ -59,13 +59,34 @@ export default function ApprovalsPage() {
     },
   });
 
-  const handleResolve = (requestId: number, approved: boolean) => {
+  const resolveAgeCategoryMutation = useMutation({
+    mutationFn: ({ requestId, approved }: { requestId: number; approved: boolean }) =>
+      approvalsAPI.resolveAgeCategoryRequest(requestId, approved),
+    onSuccess: () => {
+      toast.success('Category request resolved');
+      queryClient.invalidateQueries({ queryKey: ['approvals'] });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      refetch();
+    },
+    onError: (error: any) => {
+      toast.error(error?.response?.data?.detail || 'Failed to resolve request');
+    },
+  });
+
+  const handleResolve = (request: ApprovalRequest, approved: boolean) => {
+    const isAgeCategory = request.type === 'age_category';
     if (approved) {
-      if (confirm('Are you sure you want to approve this status reversal?')) {
-        resolveMutation.mutate({ requestId, approved });
+      const msg = isAgeCategory
+        ? `Approve category change to ${request.requested_status}?`
+        : 'Are you sure you want to approve this status reversal?';
+      if (confirm(msg)) {
+        if (isAgeCategory) resolveAgeCategoryMutation.mutate({ requestId: request.id, approved });
+        else resolveStatusMutation.mutate({ requestId: request.id, approved });
       }
     } else {
-      resolveMutation.mutate({ requestId, approved });
+      if (isAgeCategory) resolveAgeCategoryMutation.mutate({ requestId: request.id, approved });
+      else resolveStatusMutation.mutate({ requestId: request.id, approved });
     }
   };
 
@@ -117,7 +138,7 @@ export default function ApprovalsPage() {
                       Requested By
                     </th>
                     <th className="px-4 py-2 text-left text-xs font-bold text-tofa-gold uppercase tracking-wider">
-                      Reversal Path
+                      Type / Path
                     </th>
                     <th className="px-4 py-2 text-left text-xs font-bold text-tofa-gold uppercase tracking-wider">
                       Reason
@@ -132,7 +153,7 @@ export default function ApprovalsPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {requests.map((request: ApprovalRequest) => (
-                    <tr key={request.id} className="hover:bg-gray-50">
+                    <tr key={`${request.type ?? 'status'}-${request.id}`} className="hover:bg-gray-50">
                       <td className="px-4 py-2">
                         <div>
                           <p className="font-semibold text-gray-900">{request.lead_name}</p>
@@ -143,15 +164,20 @@ export default function ApprovalsPage() {
                         <p className="text-sm text-gray-700">{request.requested_by_name}</p>
                       </td>
                       <td className="px-4 py-2">
-                        <div className="flex items-center gap-2">
-                          <span className="px-2 py-1 bg-red-100 text-red-700 text-xs font-semibold rounded">
-                            {request.current_status}
-                          </span>
-                          <span className="text-gray-400">→</span>
-                          <span className="px-2 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded">
-                            {request.requested_status}
-                          </span>
-                        </div>
+                        {request.type === 'age_category' ? (
+                          <div className="flex items-center gap-2">
+                            <span className="px-1.5 py-0.5 bg-gray-100 text-gray-600 text-xs rounded">Category</span>
+                            <span className="px-2 py-1 bg-amber-100 text-amber-700 text-xs font-semibold rounded">{request.current_status}</span>
+                            <span className="text-gray-400">→</span>
+                            <span className="px-2 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded">{request.requested_status}</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-1 bg-red-100 text-red-700 text-xs font-semibold rounded">{request.current_status}</span>
+                            <span className="text-gray-400">→</span>
+                            <span className="px-2 py-1 bg-green-100 text-green-700 text-xs font-semibold rounded">{request.requested_status}</span>
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-2">
                         <p className="text-sm text-gray-600 max-w-md">{request.reason}</p>
@@ -164,8 +190,8 @@ export default function ApprovalsPage() {
                       <td className="px-4 py-2">
                         <div className="flex items-center gap-2">
                           <Button
-                            onClick={() => handleResolve(request.id, true)}
-                            disabled={resolveMutation.isPending}
+                            onClick={() => handleResolve(request, true)}
+                            disabled={resolveStatusMutation.isPending || resolveAgeCategoryMutation.isPending}
                             variant="primary"
                             size="sm"
                             className="flex items-center gap-1"
@@ -174,8 +200,8 @@ export default function ApprovalsPage() {
                             Approve
                           </Button>
                           <button
-                            onClick={() => handleResolve(request.id, false)}
-                            disabled={resolveMutation.isPending}
+                            onClick={() => handleResolve(request, false)}
+                            disabled={resolveStatusMutation.isPending || resolveAgeCategoryMutation.isPending}
                             className="flex items-center gap-1 px-3 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                           >
                             <X className="w-4 h-4" />

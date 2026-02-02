@@ -42,7 +42,6 @@ A comprehensive Customer Relationship Management system for TOFA Academy, built 
 ## 📚 Documentation
 
 - **[SETUP.md](./SETUP.md)** - Complete setup and run guide (READ THIS FIRST!)
-- **setup_supabase_project.py** - Helper script for Supabase database setup (optional)
 
 ## 🛠️ Tech Stack
 
@@ -51,22 +50,6 @@ A comprehensive Customer Relationship Management system for TOFA Academy, built 
 - **Backend:** FastAPI, Python, SQLModel
 - **Database:** PostgreSQL / Supabase
 - **Monorepo:** Turborepo
-
-## 📝 About setup_supabase_project.py
-
-This is an **optional helper script** that helps you set up Supabase database configuration. It:
-- Generates a `requirements.txt` file
-- Creates a `.env` template with Supabase connection settings
-- Generates `supabase_schema.sql` with database schema
-
-**You don't need to use it** - you can set up everything manually using the [SETUP.md](./SETUP.md) guide.
-
-To use it:
-```bash
-python setup_supabase_project.py
-```
-
----
 
 For detailed setup instructions, troubleshooting, and deployment guides, see [SETUP.md](./SETUP.md).
 

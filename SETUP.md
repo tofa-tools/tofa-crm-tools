@@ -86,11 +86,6 @@ ENVIRONMENT=development
 DATABASE_URL=postgresql://postgres:[YOUR-PASSWORD]@[YOUR-PROJECT-REF].supabase.co:5432/postgres
 ```
 
-**Note:** There's a helper script `setup_supabase_project.py` that can help you set up Supabase. Run it with:
-```bash
-python setup_supabase_project.py
-```
-
 ### Step 3: Initialize Database
 
 If using Supabase, run the SQL schema:
@@ -422,12 +417,6 @@ psql -U postgres -d tofa_db -f supabase_schema.sql
    - Go to Supabase Dashboard → SQL Editor
    - Copy contents of `supabase_schema.sql`
    - Paste and run
-
-**Helper Script:** You can also use `setup_supabase_project.py`:
-```bash
-python setup_supabase_project.py
-```
-This script helps generate the necessary files for Supabase setup.
 
 ---
 

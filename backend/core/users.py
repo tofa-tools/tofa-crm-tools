@@ -164,8 +164,17 @@ def verify_user_credentials(db: Session, email: str, password: str) -> Optional[
     if not user:
         return None
     
+    # Bcrypt limit is 72 bytes. Truncate here so we never pass longer to verify, even if auth layer is old.
+    _p = password or ""
+    try:
+        _enc = _p.encode("utf-8")
+        if len(_enc) > 72:
+            _p = _enc[:72].decode("utf-8", errors="ignore")
+    except Exception:
+        _p = (_p or "")[:72]
+    
     from backend.core.auth import verify_password
-    if not verify_password(password, user.hashed_password):
+    if not verify_password(_p, user.hashed_password or ""):
         return None
     
     # Check if user account is active

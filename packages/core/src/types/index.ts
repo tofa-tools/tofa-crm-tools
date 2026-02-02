@@ -18,6 +18,9 @@ export interface CenterCreate {
   location?: string;
 }
 
+// Age categories (master list and calculator)
+export { AGE_CATEGORIES, calculateAgeCategory, type AgeCategory } from '../logic/age-categories';
+
 // Re-export Lead schemas and types
 export type { Lead, LeadStatus, LeadUpdate, LeadCreate } from '../schemas/lead';
 export { LeadSchema, LeadUpdateSchema, LeadCreateSchema, LeadStatusSchema } from '../schemas/lead';

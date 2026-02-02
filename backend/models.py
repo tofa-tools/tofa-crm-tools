@@ -74,7 +74,7 @@ class Batch(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
     center_id: int = Field(foreign_key="center.id")
-    age_category: str  # e.g., 'U9', 'U11'
+    age_category: str  # Comma-separated list, e.g. 'U9' or 'U7,U9' for multi-age batches
     max_capacity: int = Field(default=20)
     
     # Seven-Boolean Schedule
@@ -284,6 +284,20 @@ class StatusChangeRequest(SQLModel, table=True):
     current_status: str  # Current status of the lead
     requested_status: str  # Status to revert to
     reason: str  # Reason for the reversal request
+    request_status: str = Field(default="pending")  # 'pending', 'approved', 'rejected'
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    resolved_at: Optional[datetime] = None
+    resolved_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+
+
+class AgeCategoryChangeRequest(SQLModel, table=True):
+    """Age category change approval request (team member requests, team lead resolves)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    lead_id: int = Field(foreign_key="lead.id")
+    requested_by_id: int = Field(foreign_key="user.id")
+    current_category: str = ""
+    requested_category: str = ""
+    reason: str = Field(default="Aged up; category update requested.")
     request_status: str = Field(default="pending")  # 'pending', 'approved', 'rejected'
     created_at: datetime = Field(default_factory=datetime.utcnow)
     resolved_at: Optional[datetime] = None

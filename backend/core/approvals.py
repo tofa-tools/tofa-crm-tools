@@ -4,7 +4,7 @@ Core logic for status change approval requests.
 from sqlmodel import Session, select
 from typing import List, Optional
 from datetime import datetime
-from backend.models import StatusChangeRequest, Lead, User, Student, StudentBatchLink
+from backend.models import StatusChangeRequest, AgeCategoryChangeRequest, Lead, User, Student, StudentBatchLink
 from backend.core.leads import update_lead
 from backend.core.audit import log_field_update
 
@@ -176,5 +176,97 @@ def get_requests_for_lead(db: Session, lead_id: int) -> List[StatusChangeRequest
         StatusChangeRequest.lead_id == lead_id
     ).order_by(StatusChangeRequest.created_at.desc())
     
+    return list(db.exec(statement).all())
+
+
+# ---------- Age category change requests ----------
+
+def create_age_category_request(
+    db: Session,
+    lead_id: int,
+    requested_by_id: int,
+    requested_category: str,
+    reason: Optional[str] = None
+) -> AgeCategoryChangeRequest:
+    """Create an age category change request. Only non–team-lead users should call this."""
+    lead = db.get(Lead, lead_id)
+    if not lead:
+        raise ValueError(f"Lead {lead_id} not found")
+    user = db.get(User, requested_by_id)
+    if not user:
+        raise ValueError(f"User {requested_by_id} not found")
+    if user.role == "team_lead":
+        raise ValueError("Team leads cannot create approval requests. They can change category directly.")
+    req = AgeCategoryChangeRequest(
+        lead_id=lead_id,
+        requested_by_id=requested_by_id,
+        current_category=lead.player_age_category or "",
+        requested_category=requested_category,
+        reason=reason or "Aged up; category update requested.",
+        request_status="pending",
+    )
+    db.add(req)
+    db.commit()
+    db.refresh(req)
+    return req
+
+
+def get_pending_age_category_requests(db: Session) -> List[AgeCategoryChangeRequest]:
+    """Get all pending age category change requests."""
+    statement = select(AgeCategoryChangeRequest).where(
+        AgeCategoryChangeRequest.request_status == "pending"
+    ).order_by(AgeCategoryChangeRequest.created_at.desc())
+    return list(db.exec(statement).all())
+
+
+def resolve_age_category_request(
+    db: Session,
+    request_id: int,
+    resolved_by_id: int,
+    approved: bool,
+    resolution_note: Optional[str] = None
+) -> AgeCategoryChangeRequest:
+    """Resolve an age category change request. Only team leads can resolve."""
+    request = db.get(AgeCategoryChangeRequest, request_id)
+    if not request:
+        raise ValueError(f"Request {request_id} not found")
+    if request.request_status != "pending":
+        raise ValueError(f"Request {request_id} is already resolved")
+    resolver = db.get(User, resolved_by_id)
+    if not resolver or resolver.role != "team_lead":
+        raise ValueError("Only team leads can resolve age category requests")
+    request.request_status = "approved" if approved else "rejected"
+    request.resolved_at = datetime.utcnow()
+    request.resolved_by_id = resolved_by_id
+    if approved:
+        lead = db.get(Lead, request.lead_id)
+        if lead:
+            old_cat = lead.player_age_category
+            update_lead(
+                db=db,
+                lead_id=request.lead_id,
+                status=lead.status,
+                player_age_category=request.requested_category,
+                user_id=resolved_by_id,
+            )
+            log_field_update(
+                db=db,
+                lead_id=request.lead_id,
+                user_id=resolved_by_id,
+                field_name="player_age_category",
+                old_value=old_cat or "",
+                new_value=request.requested_category,
+            )
+    db.add(request)
+    db.commit()
+    db.refresh(request)
+    return request
+
+
+def get_age_category_requests_for_lead(db: Session, lead_id: int) -> List[AgeCategoryChangeRequest]:
+    """Get all age category change requests for a lead."""
+    statement = select(AgeCategoryChangeRequest).where(
+        AgeCategoryChangeRequest.lead_id == lead_id
+    ).order_by(AgeCategoryChangeRequest.created_at.desc())
     return list(db.exec(statement).all())
 

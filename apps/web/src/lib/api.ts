@@ -25,11 +25,13 @@ import { StandardErrorHandler } from '@/lib/api/ErrorHandler';
 const rawApiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 const API_URL =
   process.env.NODE_ENV === 'production'
-    ? rawApiUrl.replace(/^http:\/\//i, 'https://')
+    ? (rawApiUrl.startsWith('http://') ? rawApiUrl.replace(/^http:\/\//i, 'https://') : rawApiUrl)
     : rawApiUrl;
+// No trailing slash on baseURL (prevents redirects that drop CORS headers)
+const baseURL = API_URL.replace(/\/$/, '');
 
 if (process.env.NODE_ENV !== 'production') {
-  console.log('[api] baseURL:', API_URL);
+  console.log('[api] baseURL:', baseURL);
 }
 
 // Create platform-specific instances
@@ -37,9 +39,9 @@ const tokenStorage = createTokenStorage();
 const navigationHandler = createNavigationHandler();
 const errorHandler = new StandardErrorHandler(navigationHandler);
 
-// Create axios instance
+// Create axios instance (baseURL has no trailing slash; paths like '/token' are used as-is)
 const apiClient: AxiosInstance = axios.create({
-  baseURL: API_URL,
+  baseURL,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -208,6 +210,7 @@ export const leadsAPI = {
     phone: string;
     email?: string;
     address?: string;
+    date_of_birth?: string;
     center_id: number;
     status: string;
   }): Promise<Lead> => {
@@ -358,12 +361,12 @@ export const studentsAPI = {
 // Users API
 export const usersAPI = {
   getUsers: async (): Promise<User[]> => {
-    const response = await apiClient.get<User[]>('/users/');
+    const response = await apiClient.get<User[]>('/users');
     return response.data;
   },
 
   createUser: async (userData: UserCreate): Promise<{ status: string }> => {
-    const response = await apiClient.post('/users/', userData);
+    const response = await apiClient.post('/users', userData);
     return response.data;
   },
 
@@ -381,12 +384,12 @@ export const usersAPI = {
 // Centers API
 export const centersAPI = {
   getCenters: async (): Promise<Center[]> => {
-    const response = await apiClient.get<Center[]>('/centers/');
+    const response = await apiClient.get<Center[]>('/centers');
     return response.data;
   },
 
   createCenter: async (centerData: CenterCreate): Promise<Center> => {
-    const response = await apiClient.post<Center>('/centers/', centerData);
+    const response = await apiClient.post<Center>('/centers', centerData);
     return response.data;
   },
 
@@ -482,6 +485,7 @@ export const stagingAPI = {
       player_age_category: string;
       email?: string;
       address?: string;
+      date_of_birth?: string;
     }
   ): Promise<Lead> => {
     const response = await apiClient.post(`/staging/leads/${stagingId}/promote`, data);
@@ -815,6 +819,7 @@ export const approvalsAPI = {
   getPendingRequests: async (): Promise<{
     requests: Array<{
       id: number;
+      type?: 'status' | 'age_category';
       lead_id: number;
       lead_name: string;
       requested_by_name: string;
@@ -846,6 +851,7 @@ export const approvalsAPI = {
   getLeadRequests: async (leadId: number): Promise<{
     requests: Array<{
       id: number;
+      type?: 'status' | 'age_category';
       current_status: string;
       requested_status: string;
       reason: string;
@@ -857,6 +863,18 @@ export const approvalsAPI = {
     }>;
   }> => {
     const response = await apiClient.get(`/approvals/lead/${leadId}`);
+    return response.data;
+  },
+
+  createAgeCategoryRequest: async (data: { lead_id: number; requested_category: string; reason?: string }): Promise<{ status: string; message: string; request_id: number }> => {
+    const params = buildQueryParams({ lead_id: data.lead_id, requested_category: data.requested_category, ...(data.reason != null && { reason: data.reason }) });
+    const response = await apiClient.post('/approvals/request-age-category', null, { params });
+    return response.data;
+  },
+
+  resolveAgeCategoryRequest: async (requestId: number, approved: boolean, resolutionNote?: string): Promise<{ status: string; message: string }> => {
+    const params = buildQueryParams({ approved, ...(resolutionNote != null && { resolution_note: resolutionNote }) });
+    const response = await apiClient.post(`/approvals/age-category/${requestId}/resolve`, null, { params });
     return response.data;
   },
 };

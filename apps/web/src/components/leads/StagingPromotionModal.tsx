@@ -1,7 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
+import { AGE_CATEGORIES, calculateAgeCategory } from '@tofa/core';
 import { stagingAPI } from '@/lib/api';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -28,16 +29,15 @@ interface StagingPromotionModalProps {
   stagingLead: StagingLead | null;
 }
 
-const AGE_CATEGORIES = ['U9', 'U11', 'U13', 'U15', 'U17+'];
-
 export function StagingPromotionModal({ isOpen, onClose, stagingLead }: StagingPromotionModalProps) {
   const queryClient = useQueryClient();
   const [playerAgeCategory, setPlayerAgeCategory] = useState('');
+  const [dateOfBirth, setDateOfBirth] = useState('');
   const [email, setEmail] = useState(stagingLead?.email || '');
   const [address, setAddress] = useState('');
 
   const promoteMutation = useMutation({
-    mutationFn: (data: { player_age_category: string; email?: string; address?: string }) =>
+    mutationFn: (data: { player_age_category: string; email?: string; address?: string; date_of_birth?: string }) =>
       stagingAPI.promoteStagingLead(stagingLead!.id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['stagingLeads'] });
@@ -52,8 +52,18 @@ export function StagingPromotionModal({ isOpen, onClose, stagingLead }: StagingP
     },
   });
 
+  // When DOB is set and age category is empty, auto-suggest category from DOB (do not overwrite if user already chose)
+  const suggestedCategory = dateOfBirth ? calculateAgeCategory(dateOfBirth) : null;
+  useEffect(() => {
+    if (suggestedCategory && !playerAgeCategory) {
+      setPlayerAgeCategory(suggestedCategory);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only suggest when DOB changes; do not overwrite user's category
+  }, [dateOfBirth, suggestedCategory]);
+
   const handleClose = () => {
     setPlayerAgeCategory('');
+    setDateOfBirth('');
     setEmail('');
     setAddress('');
     onClose();
@@ -71,6 +81,7 @@ export function StagingPromotionModal({ isOpen, onClose, stagingLead }: StagingP
       player_age_category: playerAgeCategory,
       email: email || undefined,
       address: address || undefined,
+      date_of_birth: dateOfBirth || undefined,
     });
   };
 
@@ -130,6 +141,23 @@ export function StagingPromotionModal({ isOpen, onClose, stagingLead }: StagingP
                 </option>
               ))}
             </Select>
+          </div>
+
+          <div>
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              Date of Birth (Optional)
+            </label>
+            <Input
+              type="date"
+              value={dateOfBirth}
+              onChange={(e) => setDateOfBirth(e.target.value)}
+              placeholder="YYYY-MM-DD"
+            />
+            {suggestedCategory && (
+              <p className="mt-1.5 text-xs text-gray-500">
+                Child will be placed in <span className="font-medium text-gray-700">{suggestedCategory}</span>
+              </p>
+            )}
           </div>
 
           <div>

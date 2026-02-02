@@ -149,7 +149,7 @@ def create_batch(
         db: Database session
         name: Batch name
         center_id: Center ID
-        age_category: Age category (e.g., 'U9', 'U11')
+        age_category: Comma-separated categories (e.g. 'U9' or 'U7,U9'). Existing single values like 'U9' remain valid.
         max_capacity: Maximum capacity
         is_mon through is_sun: Boolean schedule flags
         start_time: Optional start time (HH:MM:SS format)

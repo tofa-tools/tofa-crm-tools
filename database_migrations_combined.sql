@@ -127,6 +127,26 @@ COMMENT ON COLUMN lead.call_confirmation_note IS 'Summary/notes from the confirm
 COMMENT ON COLUMN lead.extra_data IS 'Extensible JSONB field for additional data (skill reports, etc.)';
 
 -- ==========================================
+-- 6. AGE CATEGORY CHANGE REQUEST TABLE
+-- ==========================================
+-- Team members can request age category updates; team leads approve/reject.
+CREATE TABLE IF NOT EXISTS agecategorychangerequest (
+    id SERIAL PRIMARY KEY,
+    lead_id INTEGER NOT NULL REFERENCES lead(id) ON DELETE CASCADE,
+    requested_by_id INTEGER NOT NULL REFERENCES "user"(id),
+    current_category VARCHAR NOT NULL,
+    requested_category VARCHAR NOT NULL,
+    reason TEXT DEFAULT 'Aged up; category update requested.',
+    request_status VARCHAR DEFAULT 'pending',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP WITH TIME ZONE,
+    resolved_by_id INTEGER REFERENCES "user"(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_agecategorychangerequest_lead_id ON agecategorychangerequest(lead_id);
+CREATE INDEX IF NOT EXISTS idx_agecategorychangerequest_request_status ON agecategorychangerequest(request_status) WHERE request_status = 'pending';
+
+-- ==========================================
 -- Migration Complete
 -- ==========================================
 -- All migrations have been applied successfully.
@@ -138,4 +158,5 @@ COMMENT ON COLUMN lead.extra_data IS 'Extensible JSONB field for additional data
 -- - Re-engagement nudge tracking (Nurture leads)
 -- - Grace period nudge tracking (Students)
 -- - Additional lead fields (call_confirmation_note, extra_data)
+-- - Age category change approval requests
 

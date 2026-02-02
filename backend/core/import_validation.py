@@ -8,9 +8,11 @@ import pandas as pd
 from datetime import datetime
 from backend.models import Center
 
+# Must match @tofa/core AGE_CATEGORIES: U5, U7, U9, U11, U13, U15, U17, Senior
 def calculate_age_category(dob_val) -> str:
     """
     Convert a Date of Birth (from Meta Ads CSV) into a U-Category.
+    Bands: U5 (<5), U7 (5-6), U9 (7-8), U11 (9-10), U13 (11-12), U15 (13-14), U17 (15-16), Senior (17+).
     """
     if pd.isna(dob_val) or str(dob_val).strip() == "":
         return "Unknown"
@@ -21,7 +23,8 @@ def calculate_age_category(dob_val) -> str:
         today = datetime.now()
         age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
         
-        if age < 7: return "U7"
+        if age < 5: return "U5"
+        elif age < 7: return "U7"
         elif age < 9: return "U9"
         elif age < 11: return "U11"
         elif age < 13: return "U13"

@@ -12,6 +12,8 @@ import { useCenters } from '@/hooks/useCenters';
 import { X, Plus, UserPlus, Edit, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import type { BatchCreate } from '@tofa/core';
+import { AGE_CATEGORIES } from '@tofa/core';
+import { CreateBatchModal } from '@/components/batches/CreateBatchModal';
 import { formatDate } from '@/lib/utils';
 
 export default function BatchesPage() {
@@ -64,7 +66,7 @@ export default function BatchesPage() {
   const centers = centersData || [];
   const users = usersData || [];
   const coaches = users.filter(u => u.role === 'coach');
-  const ageCategoryOptions = ['U7', 'U9', 'U11', 'U13', 'U15', 'U17', 'Senior'];
+  const ageCategoryOptions = [...AGE_CATEGORIES];
   
   // Route protection: Redirect non-team-leads
   useEffect(() => {
@@ -448,245 +450,35 @@ export default function BatchesPage() {
         )}
 
         {/* Create Batch Modal */}
-        {showCreateModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
-            <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full mx-4 max-h-[90vh] overflow-y-auto">
-              <div className="flex items-center justify-between p-6 border-b border-gray-200">
-                <h2 className="text-xl font-semibold text-gray-900 font-sans">Create New Batch</h2>
-                <button
-                  onClick={() => setShowCreateModal(false)}
-                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                  aria-label="Close"
-                >
-                  <X className="h-5 w-5 text-gray-500" />
-                </button>
-              </div>
-
-              <div className="p-6 space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Batch Name *
-                  </label>
-                  <input
-                    type="text"
-                    value={newBatch.name}
-                    onChange={(e) => setNewBatch({ ...newBatch, name: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-accent focus:border-brand-accent outline-none"
-                    placeholder="e.g., U9 Morning Batch"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Center *
-                    </label>
-                    <select
-                      value={newBatch.center_id}
-                      onChange={(e) => setNewBatch({ ...newBatch, center_id: parseInt(e.target.value) })}
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-accent focus:border-brand-accent outline-none"
-                    >
-                      <option value={0}>Select Center</option>
-                      {centers.map((center) => (
-                        <option key={center.id} value={center.id}>
-                          {center.display_name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Age Categories *
-                  </label>
-                  <div className="flex flex-wrap gap-2 border border-gray-300 rounded-lg p-3 min-h-[3rem]">
-                    {ageCategoryOptions.map((category) => (
-                      <label
-                        key={category}
-                        className="flex items-center gap-2 cursor-pointer bg-gray-50 px-3 py-2 rounded-lg hover:bg-gray-100"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedAgeCategories.includes(category)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedAgeCategories([...selectedAgeCategories, category]);
-                            } else {
-                              setSelectedAgeCategories(selectedAgeCategories.filter(cat => cat !== category));
-                            }
-                          }}
-                          className="rounded border-gray-300 text-brand-accent focus:ring-brand-accent"
-                        />
-                        <span className="text-sm">{category}</span>
-                      </label>
-                    ))}
-                  </div>
-                  {selectedAgeCategories.length === 0 && (
-                    <p className="text-xs text-red-500 mt-1">Please select at least one age category</p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Max Capacity
-                  </label>
-                  <input
-                    type="number"
-                    value={newBatch.max_capacity}
-                    onChange={(e) => setNewBatch({ ...newBatch, max_capacity: parseInt(e.target.value) || 20 })}
-                    min="1"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-accent focus:border-brand-accent outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Start Date *
-                  </label>
-                  <input
-                    type="date"
-                    value={newBatch.start_date}
-                    onChange={(e) => setNewBatch({ ...newBatch, start_date: e.target.value })}
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-accent focus:border-brand-accent outline-none"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Schedule (Days) *
-                  </label>
-                  <div className="grid grid-cols-4 gap-2">
-                    {[
-                      { key: 'is_mon', label: 'Mon' },
-                      { key: 'is_tue', label: 'Tue' },
-                      { key: 'is_wed', label: 'Wed' },
-                      { key: 'is_thu', label: 'Thu' },
-                      { key: 'is_fri', label: 'Fri' },
-                      { key: 'is_sat', label: 'Sat' },
-                      { key: 'is_sun', label: 'Sun' },
-                    ].map((day) => (
-                      <label key={day.key} className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={(newBatch as any)[day.key]}
-                          onChange={(e) =>
-                            setNewBatch({ ...newBatch, [day.key]: e.target.checked })
-                          }
-                          className="rounded border-gray-300 text-brand-accent focus:ring-brand-accent"
-                        />
-                        <span className="text-sm text-gray-700">{day.label}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Start Time
-                    </label>
-                    <input
-                      type="time"
-                      value={newBatch.start_time || ''}
-                      onChange={(e) =>
-                        setNewBatch({ ...newBatch, start_time: e.target.value || null })
-                      }
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-accent focus:border-brand-accent outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      End Time
-                    </label>
-                    <input
-                      type="time"
-                      value={newBatch.end_time || ''}
-                      onChange={(e) =>
-                        setNewBatch({ ...newBatch, end_time: e.target.value || null })
-                      }
-                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-accent focus:border-brand-accent outline-none"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Assign Coaches <span className="text-red-500">*</span>
-                  </label>
-                  {coaches.length === 0 ? (
-                    <p className="text-sm text-gray-500 mb-2">
-                      No coaches available. Create a coach account first.
-                    </p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2 max-h-40 overflow-y-auto border border-gray-300 rounded-lg p-3">
-                      {coaches.map((coach) => (
-                        <label
-                          key={coach.id}
-                          className="flex items-center gap-2 cursor-pointer bg-gray-50 px-3 py-2 rounded-lg hover:bg-gray-100"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={newBatch.coach_ids?.includes(coach.id) || false}
-                            onChange={(e) => {
-                              const currentIds = newBatch.coach_ids || [];
-                              if (e.target.checked) {
-                                setNewBatch({ ...newBatch, coach_ids: [...currentIds, coach.id] });
-                              } else {
-                                setNewBatch({ ...newBatch, coach_ids: currentIds.filter(id => id !== coach.id) });
-                              }
-                            }}
-                            className="rounded border-gray-300 text-brand-accent focus:ring-brand-accent"
-                          />
-                          <span className="text-sm">{coach.full_name || coach.email}</span>
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                  {newBatch.coach_ids && newBatch.coach_ids.length === 0 && (
-                    <p className="text-sm text-red-600 mt-1">At least one coach must be assigned</p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Status
-                  </label>
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={newBatch.is_active}
-                      onChange={(e) => setNewBatch({ ...newBatch, is_active: e.target.checked })}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-brand-accent/30 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-accent"></div>
-                    <span className="ml-3 text-sm font-medium text-gray-700">
-                      {newBatch.is_active ? 'Active' : 'Inactive'}
-                    </span>
-                  </label>
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-3 p-6 border-t border-gray-200">
-                <button
-                  onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg font-medium transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleCreateBatch}
-                  disabled={createBatchMutation.isPending || !isFormValid}
-                  className="px-4 py-2 bg-gradient-to-r from-yellow-500 via-amber-600 to-yellow-700 text-white rounded-lg font-medium hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
-                >
-                  {createBatchMutation.isPending ? 'Creating...' : 'Create Batch'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <CreateBatchModal
+          isOpen={showCreateModal}
+          onClose={() => setShowCreateModal(false)}
+          onSubmit={async (data) => {
+            await createBatchMutation.mutateAsync(data);
+            setShowCreateModal(false);
+            setNewBatch({
+              name: '',
+              center_id: 0,
+              age_category: '',
+              max_capacity: 20,
+              is_mon: false,
+              is_tue: false,
+              is_wed: false,
+              is_thu: false,
+              is_fri: false,
+              is_sat: false,
+              is_sun: false,
+              start_time: null,
+              end_time: null,
+              start_date: new Date().toISOString().split('T')[0],
+              is_active: true,
+              coach_ids: [],
+            });
+          }}
+          centers={centers}
+          coaches={coaches}
+          isSubmitting={createBatchMutation.isPending}
+        />
 
         {/* Assign Coach Modal */}
         {showAssignModal && selectedBatchId && (

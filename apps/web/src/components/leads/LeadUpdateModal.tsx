@@ -35,6 +35,7 @@ import {
   validateOffRamp,
   validateReversalRequest,
   filterBatchesByAgeCategory,
+  calculateAgeCategory,
   type JoiningData,
   type OffRampData
 } from '@tofa/core';
@@ -204,6 +205,7 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
   const [reversalReason, setReversalReason] = useState<string>('');
   const [pendingApproval, setPendingApproval] = useState<boolean>(false);
   const [pendingApprovalReason, setPendingApprovalReason] = useState<string>('');
+  const [isUpdatingCategory, setIsUpdatingCategory] = useState<boolean>(false);
   
   // Milestone state
   const [milestoneData, setMilestoneData] = useState<{
@@ -337,7 +339,11 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
     return null;
   }, [lead?.extra_data]);
 
-  // Filter batches by center and age category - only show ACTIVE batches
+  // Technical category from DOB (for age-migration alert)
+  const technicalCategory = lead?.date_of_birth ? calculateAgeCategory(lead.date_of_birth) : null;
+  const showAgeMismatch = technicalCategory != null && lead != null && lead.player_age_category !== technicalCategory;
+
+  // Filter batches by center and age category - only show ACTIVE batches (use lead's current category)
   const trialBatches = lead && lead.center_id 
     ? filterBatchesByAgeCategory(allBatches, lead.player_age_category, lead.center_id)
     : [];
@@ -737,10 +743,52 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 flex-wrap">
               <span className="text-sm text-gray-500 font-medium">
                 {lead.player_age_category}
               </span>
+              {showAgeMismatch && technicalCategory && (
+                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-800 text-xs font-medium" title={`Technical category from DOB: ${technicalCategory}`}>
+                  <span aria-hidden>⚠️</span>
+                  <span>Aged Up: Should be {technicalCategory}</span>
+                </span>
+              )}
+              {showAgeMismatch && technicalCategory && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!lead) return;
+                    setIsUpdatingCategory(true);
+                    try {
+                      if (user?.role === 'team_lead') {
+                        await leadsAPI.updateAgeCategory(lead.id, technicalCategory);
+                        queryClient.invalidateQueries({ queryKey: ['leads'] });
+                        queryClient.invalidateQueries({ queryKey: ['tasks'] });
+                        toast.success(`Category updated to ${technicalCategory}`);
+                      } else {
+                        await approvalsAPI.createAgeCategoryRequest({
+                          lead_id: lead.id,
+                          requested_category: technicalCategory,
+                          reason: `Aged up; update to ${technicalCategory} requested.`,
+                        });
+                        toast.success('Category change requested. A team lead will approve.');
+                        queryClient.invalidateQueries({ queryKey: ['approvals'] });
+                      }
+                    } catch (err: unknown) {
+                      const detail = err && typeof err === 'object' && 'response' in err && typeof (err as { response?: { data?: { detail?: string } } }).response?.data?.detail === 'string'
+                        ? (err as { response: { data: { detail: string } } }).response.data.detail
+                        : 'Failed to update category';
+                      toast.error(detail);
+                    } finally {
+                      setIsUpdatingCategory(false);
+                    }
+                  }}
+                  disabled={isUpdatingCategory}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-900 text-xs font-medium transition-colors disabled:opacity-50"
+                >
+                  {isUpdatingCategory ? <span className="animate-spin">⟳</span> : <span>🔄 Update Category</span>}
+                </button>
+              )}
               <span className="text-xs font-bold text-gray-400">ID: #{lead.id}</span>
             </div>
           </div>
@@ -1529,6 +1577,15 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                       </p>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* Missing DOB notice */}
+              {!lead.date_of_birth && (
+                <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-2xl">
+                  <p className="text-sm font-semibold text-amber-900">
+                    Action Required: Please update Player Date of Birth to enable age-group tracking.
+                  </p>
                 </div>
               )}
 

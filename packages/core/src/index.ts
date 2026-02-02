@@ -5,6 +5,7 @@
 
 // Export all logic functions
 export * from './logic/api-transform';
+export * from './logic/age-categories';
 // Export attendance logic with explicit names to avoid conflicts
 export {
   calculateAttendanceSummary,

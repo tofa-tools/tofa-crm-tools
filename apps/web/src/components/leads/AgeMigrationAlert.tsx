@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { ArrowUpCircle } from 'lucide-react';
-import { calculateAgeCategory } from '@/lib/utils';
+import { calculateAgeCategory } from '@tofa/core';
 import { leadsAPI } from '@/lib/api';
 
 interface AgeMigrationAlertProps {

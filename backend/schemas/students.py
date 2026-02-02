@@ -26,6 +26,7 @@ class StudentRead(BaseModel):
     lead_email: Optional[str] = None  # Email from lead
     lead_address: Optional[str] = None  # Address from lead
     lead_player_age_category: Optional[str] = None  # Age category from lead
+    lead_date_of_birth: Optional[date] = None  # DOB from lead (for missing-DOB flag)
     lead_status: Optional[str] = None  # Status from lead
     student_batch_ids: Optional[List[int]] = None  # Batch IDs from relationship
     
@@ -46,6 +47,7 @@ class StudentRead(BaseModel):
         email = None
         address = None
         age_category = None
+        lead_dob = None
         status = None
         if hasattr(obj, 'lead') and obj.lead:
             lead = obj.lead
@@ -54,6 +56,7 @@ class StudentRead(BaseModel):
             email = lead.email
             address = lead.address
             age_category = lead.player_age_category
+            lead_dob = getattr(lead, 'date_of_birth', None)
             status = lead.status
         
         return StudentRead(
@@ -74,6 +77,7 @@ class StudentRead(BaseModel):
             lead_email=email,
             lead_address=address,
             lead_player_age_category=age_category,
+            lead_date_of_birth=lead_dob,
             lead_status=status,
             student_batch_ids=batch_ids
         )

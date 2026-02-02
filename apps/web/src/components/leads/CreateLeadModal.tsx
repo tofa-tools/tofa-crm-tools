@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
-import { leadsAPI, centersAPI } from '@/lib/api';
-import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
+import { AGE_CATEGORIES, calculateAgeCategory } from '@tofa/core';
+import { leadsAPI } from '@/lib/api';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { Input } from '@/components/ui/Input';
 import { Select } from '@/components/ui/Select';
@@ -15,19 +16,15 @@ interface CreateLeadModalProps {
   onClose: () => void;
 }
 
-const AGE_CATEGORIES = ['U9', 'U11', 'U13', 'U15', 'U17+'];
 const LEAD_STATUSES = ['New', 'Called', 'Trial Scheduled', 'Trial Attended', 'Joined', 'Nurture', 'Dead/Not Interested'];
 
 export function CreateLeadModal({ isOpen, onClose }: CreateLeadModalProps) {
   const queryClient = useQueryClient();
-  const { data: centersData } = useQuery({
-    queryKey: ['centers'],
-    queryFn: () => centersAPI.getCenters(),
-  });
-  const centers = centersData?.centers || [];
+  const { data: centers = [] } = useCenters();
   
   const [playerName, setPlayerName] = useState('');
   const [playerAgeCategory, setPlayerAgeCategory] = useState('');
+  const [dateOfBirth, setDateOfBirth] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
@@ -41,6 +38,7 @@ export function CreateLeadModal({ isOpen, onClose }: CreateLeadModalProps) {
       phone: string;
       email?: string;
       address?: string;
+      date_of_birth?: string;
       center_id: number;
       status: string;
     }) => leadsAPI.createLead(data),
@@ -56,9 +54,19 @@ export function CreateLeadModal({ isOpen, onClose }: CreateLeadModalProps) {
     },
   });
 
+  // When DOB is set and age category is empty, auto-suggest category from DOB (do not overwrite if user already chose)
+  const suggestedCategory = dateOfBirth ? calculateAgeCategory(dateOfBirth) : null;
+  useEffect(() => {
+    if (suggestedCategory && !playerAgeCategory) {
+      setPlayerAgeCategory(suggestedCategory);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only suggest when DOB changes; do not overwrite user's category
+  }, [dateOfBirth, suggestedCategory]);
+
   const handleClose = () => {
     setPlayerName('');
     setPlayerAgeCategory('');
+    setDateOfBirth('');
     setPhone('');
     setEmail('');
     setAddress('');
@@ -81,6 +89,7 @@ export function CreateLeadModal({ isOpen, onClose }: CreateLeadModalProps) {
       phone: phone,
       email: email || undefined,
       address: address || undefined,
+      date_of_birth: dateOfBirth || undefined,
       center_id: Number(centerId),
       status: status,
     });
@@ -139,6 +148,23 @@ export function CreateLeadModal({ isOpen, onClose }: CreateLeadModalProps) {
 
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-2">
+                Date of Birth (Optional)
+              </label>
+              <Input
+                type="date"
+                value={dateOfBirth}
+                onChange={(e) => setDateOfBirth(e.target.value)}
+                placeholder="YYYY-MM-DD"
+              />
+              {suggestedCategory && (
+                <p className="mt-1.5 text-xs text-gray-500">
+                  Child will be placed in <span className="font-medium text-gray-700">{suggestedCategory}</span>
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-2">
                 Phone *
               </label>
               <Input
@@ -167,11 +193,13 @@ export function CreateLeadModal({ isOpen, onClose }: CreateLeadModalProps) {
                 Center *
               </label>
               <Select
-                value={centerId}
+                value={centerId === '' ? '' : centerId}
                 onChange={(e) => setCenterId(e.target.value ? Number(e.target.value) : '')}
                 required
               >
-                <option value="">Select center</option>
+                <option value="" disabled>
+                  Select center
+                </option>
                 {centers.map((center) => (
                   <option key={center.id} value={center.id}>
                     {center.display_name}

@@ -7,7 +7,8 @@ import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import { useSidebar } from '@/context/SidebarContext';
 
-export function MainLayout({ children }: { children: ReactNode }) {
+type MainLayoutProps = { children?: ReactNode };
+export function MainLayout({ children }: MainLayoutProps = {}) {
   const { isAuthenticated, isLoading, user } = useAuth();
   const router = useRouter();
   const { isCollapsed, toggleCollapse } = useSidebar();

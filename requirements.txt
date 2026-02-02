@@ -6,9 +6,10 @@ uvicorn
 sqlmodel
 psycopg2-binary
 
-# Authentication
+# Authentication (pin bcrypt/passlib for compatibility; bcrypt 4.1+ breaks passlib)
 python-jose[cryptography]
-passlib[bcrypt]
+bcrypt==4.0.1
+passlib[bcrypt]==1.7.4
 
 # File Processing
 pandas
@@ -18,6 +19,7 @@ openpyxl
 python-multipart
 python-dotenv
 requests
+pydantic[email]
 
 # Error Tracking
 sentry-sdk[fastapi]

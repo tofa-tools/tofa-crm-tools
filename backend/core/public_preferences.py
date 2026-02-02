@@ -7,19 +7,13 @@ from typing import Optional, Dict, List, Any
 from backend.models import Lead, Batch, Center
 
 
+# Must match @tofa/core AGE_CATEGORIES: U5, U7, U9, U11, U13, U15, U17, Senior
 def get_nearest_age_categories(age_category: str) -> List[str]:
     """
     Get nearest age categories for fallback when exact match not found.
-    
-    Age category order: U7, U9, U11, U13, U15, U17, Senior
-    
-    Args:
-        age_category: The target age category
-        
-    Returns:
-        List of nearest age categories to try
+    Order matches core: U5, U7, U9, U11, U13, U15, U17, Senior.
     """
-    age_order = ["U7", "U9", "U11", "U13", "U15", "U17", "Senior"]
+    age_order = ["U5", "U7", "U9", "U11", "U13", "U15", "U17", "Senior"]
     
     if age_category not in age_order:
         # If unknown category, return all in order

@@ -184,6 +184,7 @@ def promote_staging_lead(
     player_age_category: str,  # Required for promotion
     email: Optional[str] = None,
     address: Optional[str] = None,
+    date_of_birth: Optional[date] = None,
     user_id: Optional[int] = None
 ) -> Lead:
     """
@@ -194,7 +195,8 @@ def promote_staging_lead(
         staging_id: Staging lead ID
         email: Optional email address
         address: Optional address
-        player_age_category: Optional age category
+        player_age_category: Required age category
+        date_of_birth: Optional date of birth
         user_id: Optional user ID who promoted this
         
     Returns:
@@ -222,7 +224,7 @@ def promote_staging_lead(
         created_time=datetime.utcnow(),
         player_name=staging.player_name,
         player_age_category=player_age_category,
-        date_of_birth=None,  # Remove date_of_birth from staging model
+        date_of_birth=date_of_birth,
         phone=staging.phone,
         email=final_email,
         address=address,
