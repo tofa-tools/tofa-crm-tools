@@ -4,6 +4,7 @@ const nextConfig = {
   output: 'standalone',
   typescript: { ignoreBuildErrors: true },
   eslint: { ignoreDuringBuilds: true },
+  transpilePackages: ['react-hot-toast'],
   // Serve favicon at root so /favicon.ico does not 404 (uses logo.png if favicon.ico missing)
   async rewrites() {
     return [{ source: '/favicon.ico', destination: '/logo.png' }];

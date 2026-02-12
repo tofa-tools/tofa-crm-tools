@@ -5,12 +5,15 @@ import toast from 'react-hot-toast';
 interface UseStudentsParams {
   center_id?: number;
   is_active?: boolean;
+  enabled?: boolean;
 }
 
 export function useStudents(params?: UseStudentsParams) {
+  const { enabled = true, ...apiParams } = params || {};
   return useQuery({
-    queryKey: ['students', params],
-    queryFn: () => studentsAPI.getStudents(params),
+    queryKey: ['students', apiParams],
+    queryFn: () => studentsAPI.getStudents(apiParams),
+    enabled,
     placeholderData: (previousData) => previousData,
   });
 }

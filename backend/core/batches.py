@@ -127,7 +127,8 @@ def create_batch(
     db: Session,
     name: str,
     center_id: int,
-    age_category: str,
+    min_age: int = 0,
+    max_age: int = 99,
     max_capacity: int = 20,
     is_mon: bool = False,
     is_tue: bool = False,
@@ -149,7 +150,8 @@ def create_batch(
         db: Database session
         name: Batch name
         center_id: Center ID
-        age_category: Comma-separated categories (e.g. 'U9' or 'U7,U9'). Existing single values like 'U9' remain valid.
+        min_age: Minimum age for batch (inclusive)
+        max_age: Maximum age for batch (inclusive)
         max_capacity: Maximum capacity
         is_mon through is_sun: Boolean schedule flags
         start_time: Optional start time (HH:MM:SS format)
@@ -194,7 +196,8 @@ def create_batch(
     batch = Batch(
         name=name,
         center_id=center_id,
-        age_category=age_category,
+        min_age=min_age,
+        max_age=max_age,
         max_capacity=max_capacity,
         is_mon=is_mon,
         is_tue=is_tue,
@@ -319,7 +322,8 @@ def update_batch(
     batch_id: int,
     name: Optional[str] = None,
     center_id: Optional[int] = None,
-    age_category: Optional[str] = None,
+    min_age: Optional[int] = None,
+    max_age: Optional[int] = None,
     max_capacity: Optional[int] = None,
     is_mon: Optional[bool] = None,
     is_tue: Optional[bool] = None,
@@ -342,7 +346,8 @@ def update_batch(
         batch_id: Batch ID
         name: Optional new name
         center_id: Optional new center ID
-        age_category: Optional new age category
+        min_age: Optional new minimum age
+        max_age: Optional new maximum age
         max_capacity: Optional new max capacity
         is_mon through is_sun: Optional schedule flags
         start_time: Optional start time (HH:MM:SS format)
@@ -369,8 +374,12 @@ def update_batch(
         if not center:
             raise ValueError(f"Center {center_id} not found")
         batch.center_id = center_id
-    if age_category is not None:
-        batch.age_category = age_category
+    if min_age is not None and max_age is not None and max_age < min_age:
+        raise ValueError("max_age must be >= min_age")
+    if min_age is not None:
+        batch.min_age = min_age
+    if max_age is not None:
+        batch.max_age = max_age
     if max_capacity is not None:
         batch.max_capacity = max_capacity
     if is_mon is not None:

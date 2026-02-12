@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { LayoutDashboard, CheckSquare, Users, LogOut } from 'lucide-react';
+import { LayoutDashboard, CheckSquare, UserPlus, Users, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/context/AuthContext';
 
@@ -20,8 +20,8 @@ export function BottomNavigation() {
   const { logout, user } = useAuth();
 
   // Handle attendance navigation with batchId from localStorage
-  const handleAttendanceClick = (e: React.MouseEvent) => {
-    e.preventDefault();
+  const handleAttendanceClick = (e?: React.MouseEvent) => {
+    e?.preventDefault();
     if (typeof window !== 'undefined') {
       const lastBatchId = localStorage.getItem('lastSelectedBatchId');
       if (lastBatchId) {
@@ -32,21 +32,22 @@ export function BottomNavigation() {
     }
   };
 
-  // Coach-specific navigation
+  // Coach-specific navigation (Capture as central button)
   const navItems: BottomNavItem[] = [
     { label: 'Sessions', href: '/coach/dashboard', icon: LayoutDashboard },
-    { 
-      label: 'Attendance', 
+    {
+      label: 'Attendance',
       href: '/check-in',
       icon: CheckSquare,
       onClick: handleAttendanceClick,
     },
-    { label: 'Player Skills', href: '/coach/players', icon: Users },
-    { 
-      label: 'Logout', 
-      icon: LogOut, 
+    { label: 'Field Capture', href: '/coach/capture', icon: UserPlus },
+    { label: 'Players', href: '/coach/players', icon: Users },
+    {
+      label: 'Logout',
+      icon: LogOut,
       onClick: logout,
-      isButton: true
+      isButton: true,
     },
   ];
 
@@ -55,7 +56,7 @@ export function BottomNavigation() {
       <div className="flex items-center justify-around h-20 px-2">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const isActive = item.href && (pathname === item.href || pathname.startsWith(item.href + '/'));
+          const isActive = item.href && pathname != null && (pathname === item.href || pathname.startsWith(item.href + '/'));
           
           if (item.isButton) {
             return (

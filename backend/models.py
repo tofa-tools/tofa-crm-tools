@@ -34,6 +34,7 @@ class User(SQLModel, table=True):
     email: str = Field(unique=True, index=True)
     hashed_password: str
     full_name: str
+    phone: Optional[str] = Field(default=None)  # Staff contact for parents (Center Head)
     role: str = Field(default="team_member")  # 'team_lead', 'team_member', 'coach', 'observer'
     is_active: bool = Field(default=True)
     
@@ -43,12 +44,11 @@ class User(SQLModel, table=True):
     comments: List["Comment"] = Relationship(back_populates="user")
     audit_logs: List["AuditLog"] = Relationship(back_populates="user")
     attendances_taken: List["Attendance"] = Relationship(back_populates="user")
-    # Explicitly specify foreign key for status_change_requests_made relationship
-    # because StatusChangeRequest has multiple foreign keys to User (requested_by_id and resolved_by_id)
-    status_change_requests_made: List["StatusChangeRequest"] = Relationship(
+    approval_requests_made: List["ApprovalRequest"] = Relationship(
         back_populates="requested_by",
-        sa_relationship_kwargs={"foreign_keys": "[StatusChangeRequest.requested_by_id]"}
+        sa_relationship_kwargs={"foreign_keys": "[ApprovalRequest.requested_by_id]"}
     )
+    notifications: List["Notification"] = Relationship(back_populates="user")
 
 
 class Center(SQLModel, table=True):
@@ -58,6 +58,8 @@ class Center(SQLModel, table=True):
     meta_tag_name: str = Field(unique=True, index=True)
     city: str
     location: str
+    map_link: Optional[str] = Field(default=None)  # Dedicated Google Maps URL for parent-facing pages
+    group_email: Optional[str] = Field(default=None)  # Center Head / group email for internal notifications (fallback: SMTP_USER)
 
     # Relationships
     users: List[User] = Relationship(back_populates="centers", link_model=UserCenterLink)
@@ -74,7 +76,8 @@ class Batch(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
     center_id: int = Field(foreign_key="center.id")
-    age_category: str  # Comma-separated list, e.g. 'U9' or 'U7,U9' for multi-age batches
+    min_age: int = Field(default=0)  # Minimum age for this batch (inclusive)
+    max_age: int = Field(default=99)  # Maximum age for this batch (inclusive)
     max_capacity: int = Field(default=20)
     
     # Seven-Boolean Schedule
@@ -132,8 +135,7 @@ class Lead(SQLModel, table=True):
     
     # Player Info
     player_name: str
-    player_age_category: str
-    date_of_birth: Optional[date] = None  # For age migration logic
+    date_of_birth: Optional[date] = None  # Age derived from DOB in UI
     
     # Contact Info (Sensitive - Hidden from Coaches)
     phone: str
@@ -170,16 +172,24 @@ class Lead(SQLModel, table=True):
     
     # Public Preference System
     public_token: Optional[str] = Field(default=None, unique=True, index=True)  # UUID string for public access
+    preferences_submitted: bool = Field(default=False)  # Submit-once: blocks form after first submission
     preferred_batch_id: Optional[int] = Field(default=None, foreign_key="batch.id")
+    
+    # Enrollment Link & Pending Subscription (automated enrollment pipeline)
+    enrollment_link_sent_at: Optional[datetime] = None  # When enrollment link was sent
+    link_expires_at: Optional[datetime] = None  # When enrollment link expires
+    pending_subscription_data: Optional[Dict] = Field(default=None, sa_column=Column(JSONB))  # Parent's choices before verification (email, plan, start_date, utr, payment_proof_url, batch_id)
     preferred_call_time: Optional[str] = None  # e.g., 'Evenings after 6 PM'
     preferred_timing_notes: Optional[str] = None
     
     # Loss Analysis & No-Show Tracking
-    loss_reason: Optional[str] = None  # Reason for losing the lead (e.g., 'Price/Fees', 'Repeated No-Show')
+    loss_reason: Optional[str] = None  # Reason for losing the lead (use LOSS_REASONS from core)
     loss_reason_notes: Optional[str] = None  # Additional notes about the loss
+    status_at_loss: Optional[str] = None  # Lifecycle stage when moved to Dead/Nurture (e.g. 'Called', 'Trial Attended')
     reschedule_count: int = Field(default=0)  # Count of times trial was rescheduled due to absence
     nudge_count: int = Field(default=0)  # Count of re-engagement nudges sent to Nurture leads
-    
+    needs_escalation: bool = Field(default=False)  # True when preference link not clicked within 48h (nudge failure)
+
     # Note: Subscription and payment fields moved to Student model
     
     call_confirmation_note: Optional[str] = None  # Note confirming call with parent
@@ -187,7 +197,7 @@ class Lead(SQLModel, table=True):
     comments: List["Comment"] = Relationship(back_populates="lead")
     audit_logs: List["AuditLog"] = Relationship(back_populates="lead")
     attendances: List["Attendance"] = Relationship(back_populates="lead")
-    status_change_requests: List["StatusChangeRequest"] = Relationship(back_populates="lead")
+    approval_requests: List["ApprovalRequest"] = Relationship(back_populates="lead")
     
     # Relationship to Student (one-to-one: a lead can become one student)
     student: Optional["Student"] = Relationship(back_populates="lead", sa_relationship_kwargs={"uselist": False})
@@ -210,6 +220,13 @@ class Student(SQLModel, table=True):
     
     # Payment
     payment_proof_url: Optional[str] = None  # URL to uploaded payment proof image
+    utr_number: Optional[str] = None  # Parent-reported UTR/reference number
+    is_payment_verified: bool = Field(default=False)  # Admin-verified payment
+    
+    # Enrollment form (parent-reported)
+    kit_size: Optional[str] = None
+    medical_info: Optional[str] = None  # Text
+    secondary_contact: Optional[str] = None
     
     # Renewal & Grace Period
     renewal_intent: bool = Field(default=False)  # Parent has indicated intent to renew
@@ -268,41 +285,57 @@ class AuditLog(SQLModel, table=True):
 
 
 # ==========================================
-# 5. ATTENDANCE SYSTEM
+# 4b. NOTIFICATION SYSTEM
 # ==========================================
 
-class StatusChangeRequest(SQLModel, table=True):
-    """Status reversal approval request model"""
+class Notification(SQLModel, table=True):
+    """In-app notifications for users (bell feed). center_id for role-based filtering; priority for high/low; target_url for deep-linking."""
     id: Optional[int] = Field(default=None, primary_key=True)
-    lead_id: int = Field(foreign_key="lead.id")
-    lead: Optional["Lead"] = Relationship(back_populates="status_change_requests")
+    user_id: int = Field(foreign_key="user.id", index=True)
+    type: str = Field(index=True)  # SALES_ALERT, OPS_ALERT, FINANCE_ALERT, GOVERNANCE_ALERT
+    title: str = Field(max_length=255)
+    message: str = Field(max_length=2000)
+    link: Optional[str] = Field(default=None, max_length=500)
+    target_url: Optional[str] = Field(default=None, max_length=500)  # App path for deep-linking e.g. /leads?search=...
+    is_read: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    center_id: Optional[int] = Field(default=None, foreign_key="center.id", index=True)
+    priority: str = Field(default="low", index=True)  # "high" | "low"
+
+    # Relationships
+    user: Optional["User"] = Relationship(back_populates="notifications")
+
+
+# ==========================================
+# 5. UNIFIED APPROVAL REQUEST SYSTEM
+# ==========================================
+
+class ApprovalRequest(SQLModel, table=True):
+    """Unified approval request - all Team Member requests in one place."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    lead_id: Optional[int] = Field(default=None, foreign_key="lead.id")
+    student_id: Optional[int] = Field(default=None, foreign_key="student.id")
     requested_by_id: int = Field(foreign_key="user.id")
+    request_type: str = Field(index=True)  # e.g. STATUS_REVERSAL, DEACTIVATE, CENTER_TRANSFER, AGE_GROUP, DATA_UPDATE
+    current_value: str = Field(default="")
+    requested_value: str = Field(default="")
+    reason: str = Field(default="")
+    status: str = Field(default="pending", index=True)  # pending, approved, rejected
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    resolved_at: Optional[datetime] = None
+    resolved_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+
+    # Relationships
     requested_by: Optional["User"] = Relationship(
-        back_populates="status_change_requests_made",
-        sa_relationship_kwargs={"foreign_keys": "[StatusChangeRequest.requested_by_id]"}
+        back_populates="approval_requests_made",
+        sa_relationship_kwargs={"foreign_keys": "[ApprovalRequest.requested_by_id]"}
     )
-    current_status: str  # Current status of the lead
-    requested_status: str  # Status to revert to
-    reason: str  # Reason for the reversal request
-    request_status: str = Field(default="pending")  # 'pending', 'approved', 'rejected'
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    resolved_at: Optional[datetime] = None
-    resolved_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    lead: Optional["Lead"] = Relationship(back_populates="approval_requests")
 
 
-class AgeCategoryChangeRequest(SQLModel, table=True):
-    """Age category change approval request (team member requests, team lead resolves)."""
-    id: Optional[int] = Field(default=None, primary_key=True)
-    lead_id: int = Field(foreign_key="lead.id")
-    requested_by_id: int = Field(foreign_key="user.id")
-    current_category: str = ""
-    requested_category: str = ""
-    reason: str = Field(default="Aged up; category update requested.")
-    request_status: str = Field(default="pending")  # 'pending', 'approved', 'rejected'
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    resolved_at: Optional[datetime] = None
-    resolved_by_id: Optional[int] = Field(default=None, foreign_key="user.id")
-
+# ==========================================
+# 6. ATTENDANCE SYSTEM
+# ==========================================
 
 class Attendance(SQLModel, table=True):
     """Attendance model for tracking player attendance in batches"""
@@ -354,6 +387,8 @@ class LeadStaging(SQLModel, table=True):
     player_name: str
     phone: str
     email: Optional[str] = None
+    age: Optional[int] = None  # Numeric age (captured by coach)
+    date_of_birth: Optional[date] = None  # Optional; set when center head captures or on promote
     center_id: int = Field(foreign_key="center.id")
     created_at: datetime = Field(default_factory=datetime.utcnow)
     created_by_id: Optional[int] = Field(default=None, foreign_key="user.id")

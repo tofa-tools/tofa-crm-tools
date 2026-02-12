@@ -5,7 +5,7 @@
 
 // Export all logic functions
 export * from './logic/api-transform';
-export * from './logic/age-categories';
+export * from './logic/age-groups';
 // Export attendance logic with explicit names to avoid conflicts
 export {
   calculateAttendanceSummary,
@@ -44,7 +44,9 @@ export * from './types';
 
 // Export brand configuration and messaging utilities
 export * from './config/brandConfig';
+export * from './config/lossReasons';
 export * from './config/messages';
+export * from './config/notifications';
 
 // Note: ErrorHandler is platform-specific and not exported from core
 // Each platform (web/mobile) implements its own ErrorHandler

@@ -4,19 +4,9 @@ import { useState, useEffect } from 'react';
 import { useParams } from 'next/navigation';
 import axios from 'axios';
 import toast from 'react-hot-toast';
+import { LOSS_REASONS } from '@tofa/core';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
-
-const LOSS_REASON_OPTIONS = [
-  'Timing Mismatch',
-  'Days Mismatch',
-  'Duration too long',
-  'Location/Distance',
-  'Coaching Quality',
-  'Price/Fees',
-  'Kid lost interest',
-  'Other',
-];
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
 
 interface FeedbackData {
   player_name: string;
@@ -167,7 +157,7 @@ export default function FeedbackPage() {
                 required
               >
                 <option value="">Select a reason...</option>
-                {LOSS_REASON_OPTIONS.map((reason) => (
+                {LOSS_REASONS.map((reason) => (
                   <option key={reason} value={reason}>
                     {reason}
                   </option>

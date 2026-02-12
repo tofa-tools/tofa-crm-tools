@@ -10,13 +10,13 @@ import { attendanceAPI } from '@/lib/api';
 import { useLeads } from '@/hooks/useLeads';
 import { useStudents } from '@/hooks/useStudents';
 import { useQueryClient } from '@tanstack/react-query';
-import { Search, ArrowLeft, CheckCircle2, PhoneCall, BarChart3, Clock, Users } from 'lucide-react';
+import { Search, ArrowLeft, CheckCircle2, PhoneCall, BarChart3, Clock, Users, ChevronDown } from 'lucide-react';
 import Image from 'next/image';
 import toast from 'react-hot-toast';
 import { SkillReportModal } from '@/components/leads/SkillReportModal';
 import { studentsAPI } from '@/lib/api';
 import { EMERGENCY_SUPPORT_CONFIG } from '@/lib/config/crm';
-import { brandConfig } from '@tofa/core';
+import { brandConfig, calculateAge } from '@tofa/core';
 import { 
   calculateAttendanceSummary, 
   determineParticipantType,
@@ -40,6 +40,7 @@ function CheckInContent() {
   
   const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
+  const [attendanceTab, setAttendanceTab] = useState<'roster' | 'trials'>('roster');
   const [selectedStudentForSkillReport, setSelectedStudentForSkillReport] = useState<{ leadId: number; name: string; studentId?: number } | null>(null);
   const [milestoneData, setMilestoneData] = useState<Record<number, any>>({});
   const [attendanceHistoryData, setAttendanceHistoryData] = useState<Record<number, any>>({});
@@ -98,7 +99,7 @@ function CheckInContent() {
       .map(lead => ({
         id: lead.id,
         name: lead.player_name,
-        ageCategory: lead.player_age_category,
+        ageGroup: lead.date_of_birth ? String(calculateAge(lead.date_of_birth) ?? '') : '',
         type: 'trial' as const,
         studentId: null as number | null,
         leadId: lead.id,
@@ -118,11 +119,12 @@ function CheckInContent() {
         return {
           id: student.lead_id, // Use lead_id for compatibility with existing UI
           name: student.lead_player_name || 'Unknown',
-          ageCategory: student.lead_player_age_category || '', // Get from lead data
+          ageGroup: student.lead_player_age != null ? String(student.lead_player_age) : '', // Get from lead data
           type: 'student' as const,
           studentId: student.id,
           leadId: student.lead_id,
           inGracePeriod: student.in_grace_period || false, // Include grace period status
+          isPaymentVerified: student.is_payment_verified !== false, // false -> show Unverified badge
           // Include lead data for skill reports
           lead: associatedLead,
         };
@@ -132,15 +134,28 @@ function CheckInContent() {
     return [...trialLeads, ...activeStudents];
   }, [allLeads, allStudents, selectedBatchId]);
 
-  // Filter by search term
+  // Split into ROSTER (students) and TRIALS (Trial Scheduled leads)
+  const rosterParticipants = useMemo(() => 
+    batchParticipants.filter(p => p.type === 'student'),
+    [batchParticipants]
+  );
+  const trialParticipants = useMemo(() => 
+    batchParticipants.filter(p => p.type === 'trial'),
+    [batchParticipants]
+  );
+
+  // Participants for current tab
+  const tabParticipants = attendanceTab === 'roster' ? rosterParticipants : trialParticipants;
+
+  // Filter by search term (within current tab)
   const filteredParticipants = useMemo(() => {
-    if (!searchTerm) return batchParticipants;
+    if (!searchTerm) return tabParticipants;
     
     const searchLower = searchTerm.toLowerCase();
-    return batchParticipants.filter(participant =>
+    return tabParticipants.filter(participant =>
       participant.name.toLowerCase().includes(searchLower)
     );
-  }, [batchParticipants, searchTerm]);
+  }, [tabParticipants, searchTerm]);
 
   // Phase 2: Fetch milestone data and attendance history for all active students
   useEffect(() => {
@@ -332,6 +347,22 @@ function CheckInContent() {
     setSelectedBatchId(null);
     router.push('/check-in');
   };
+
+  const handleSwitchBatch = (newBatchId: number | null) => {
+    if (newBatchId === selectedBatchId) return;
+    setSelectedBatchId(newBatchId);
+    if (newBatchId) {
+      router.push(`/check-in?batchId=${newBatchId}`, { scroll: false });
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('lastSelectedBatchId', String(newBatchId));
+      }
+    } else {
+      router.push('/check-in', { scroll: false });
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('lastSelectedBatchId');
+      }
+    }
+  };
   
   if (!user || user.role !== 'coach') {
     return (
@@ -353,55 +384,83 @@ function CheckInContent() {
       <div className="min-h-screen bg-slate-50 pb-24 flex flex-col">
         {/* Compact Sticky Header with Batch Info */}
         {selectedBatchId && selectedBatch && (
-          <div className="sticky top-0 z-20 bg-gradient-to-r from-brand-primary to-brand-primary/90 text-white shadow-2xl border-b-4 border-brand-accent/30">
-            <div className="px-4 py-3 flex items-center justify-between">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-3 flex-wrap">
-                  <ArrowLeft 
-                    onClick={handleBackToCommandCenter}
-                    className="h-5 w-5 cursor-pointer hover:text-tofa-gold transition-colors flex-shrink-0" 
+          <div className="sticky top-0 z-20 bg-[#0A192F] text-white shadow-2xl border-b-4 border-brand-accent/30 overflow-hidden">
+            <div className="px-4 py-3 flex items-center justify-between gap-2">
+              <div className="flex-1 min-w-0 flex items-center gap-3">
+                <ArrowLeft
+                  onClick={handleBackToCommandCenter}
+                  className="h-5 w-5 cursor-pointer hover:text-tofa-gold transition-colors flex-shrink-0"
+                  aria-label="Back to Command Center"
+                />
+                <div className="flex-shrink-0">
+                  <Image
+                    src="/logo.png"
+                    alt={`${brandConfig.name} Logo`}
+                    width={32}
+                    height={32}
+                    className="object-contain"
                   />
-                  {/* Small Logo */}
-                  <div className="flex-shrink-0">
-                    <Image
-                      src="/logo.png"
-                      alt={`${brandConfig.name} Logo`}
-                      width={32}
-                      height={32}
-                      className="object-contain"
-                    />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h1 className="text-lg font-black uppercase tracking-tight truncate flex items-center gap-2">
-                      <span>CHECK-IN</span>
-                    </h1>
-                    <div className="flex items-center gap-3 mt-0.5">
-                      <span className="text-xs font-bold text-white/80">{selectedBatch.name}</span>
-                      <div className="flex items-center gap-1.5 text-xs font-bold text-white/70">
-                        <Clock className="h-3.5 w-3.5" />
-                        <span>{formatTime(selectedBatch.start_time)}</span>
-                      </div>
-                      <span className="text-xs font-semibold text-white/70">{selectedBatch.age_category}</span>
-                    </div>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h1 className="text-lg font-black uppercase tracking-tight truncate">CHECK-IN</h1>
+                  {/* Session switcher: dropdown to change batch without leaving page */}
+                  <div className="mt-0.5 flex items-center gap-2">
+                    <select
+                      value={selectedBatchId}
+                      onChange={(e) => handleSwitchBatch(e.target.value ? parseInt(e.target.value, 10) : null)}
+                      className="max-w-full bg-white/15 hover:bg-white/25 border border-white/30 rounded-md pl-2 pr-6 py-1 text-xs font-bold text-white focus:ring-2 focus:ring-tofa-gold/50 focus:border-tofa-gold outline-none cursor-pointer appearance-none bg-no-repeat bg-[length:1rem] bg-[right_0.25rem_center]"
+                      style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='rgba(255,255,255,0.9)'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E")` }}
+                    >
+                      {coachBatches.map((b) => (
+                        <option key={b.id} value={b.id} className="bg-[#0A192F] text-white">
+                          {b.name} · {formatTime(b.start_time)}
+                          {b.min_age != null && b.max_age != null ? ` · ${b.min_age}–${b.max_age}` : ''}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 </div>
               </div>
-              <div className="ml-3 px-3 py-1.5 bg-tofa-gold/20 backdrop-blur-sm rounded-full border-2 border-tofa-gold/40 flex items-center gap-1.5 flex-shrink-0">
-                <Users className="h-4 w-4" />
-                <span className="text-sm font-black">{attendanceSummary.total}</span>
+              <div className="px-3 py-1.5 bg-tofa-gold/20 rounded-full border-2 border-tofa-gold/40 flex items-center gap-1.5 flex-shrink-0">
+                <Users className="h-4 w-4 text-white" />
+                <span className="text-sm font-black text-white">{attendanceSummary.total}</span>
               </div>
             </div>
             
             {/* Slim Search Bar - Pinned Below Header */}
             <div className="px-4 pb-2.5 relative">
-              <Search className="absolute left-7 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Search className="absolute left-7 top-1/2 -translate-y-1/2 h-4 w-4 text-white/70" />
               <input
                 type="text"
                 placeholder="Search..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-3 py-2 bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg text-sm text-white placeholder:text-gray-300 focus:ring-2 focus:ring-indigo-400 focus:border-indigo-400 outline-none font-medium"
+                className="w-full pl-10 pr-3 py-2 bg-white/15 border border-white/25 rounded-lg text-sm text-white placeholder:text-white/60 focus:ring-2 focus:ring-tofa-gold/50 focus:border-tofa-gold/50 outline-none font-medium"
               />
+            </div>
+
+            {/* ROSTER / TRIALS Segmented Control */}
+            <div className="px-4 pb-3 flex gap-2">
+              <button
+                onClick={() => setAttendanceTab('roster')}
+                className={`flex-1 py-2 px-3 rounded-lg text-sm font-bold transition-all ${
+                  attendanceTab === 'roster'
+                    ? 'bg-tofa-gold text-tofa-navy shadow-lg'
+                    : 'bg-white/15 text-white border border-white/25 hover:bg-white/25'
+                }`}
+              >
+                ROSTER ({rosterParticipants.length})
+              </button>
+              <button
+                onClick={() => setAttendanceTab('trials')}
+                className={`flex-1 py-2 px-3 rounded-lg text-sm font-bold transition-all ${
+                  attendanceTab === 'trials'
+                    ? 'bg-tofa-gold text-tofa-navy shadow-lg'
+                    : 'bg-white/15 text-white border border-white/25 hover:bg-white/25'
+                }`}
+              >
+                TRIALS ({trialParticipants.length})
+              </button>
             </div>
           </div>
         )}
@@ -436,7 +495,7 @@ function CheckInContent() {
               <option value="">Choose a batch...</option>
               {coachBatches.map((batch) => (
                 <option key={batch.id} value={batch.id}>
-                  {batch.name} ({batch.age_category})
+                  {batch.name} ({batch.min_age != null && batch.max_age != null ? `${batch.min_age}–${batch.max_age}` : '—'})
                 </option>
               ))}
             </select>
@@ -459,7 +518,11 @@ function CheckInContent() {
                 <div className="text-center">
                   <Users className="h-12 w-12 text-gray-300 mx-auto mb-3" />
                   <p className="text-sm font-bold text-gray-600">
-                    {searchTerm ? 'No participants found' : 'No participants assigned to this batch.'}
+                    {searchTerm
+                      ? 'No participants found'
+                      : attendanceTab === 'trials'
+                        ? 'No trials scheduled for this batch today.'
+                        : 'No students assigned to this batch.'}
                   </p>
                 </div>
               </div>
@@ -500,7 +563,11 @@ function CheckInContent() {
                                 <h3 className="text-base font-black text-gray-900 uppercase tracking-tight truncate">
                                   {participant.name}
                                 </h3>
-                                
+                                {participant.type === 'student' && (participant as any).isPaymentVerified === false && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                    ⚠️ Unverified
+                                  </span>
+                                )}
                                 {/* Skills Icon - Inline */}
                                 {participant.type === 'student' && (() => {
                                   const lead = (participant as any).lead;
@@ -573,8 +640,8 @@ function CheckInContent() {
                               
                               {/* Age and Attendance Indicator - Compact */}
                               <div className="flex items-center gap-2 mt-0.5">
-                                {participant.ageCategory && (
-                                  <span className="text-xs font-bold text-gray-600">{participant.ageCategory}</span>
+                                {participant.ageGroup && (
+                                  <span className="text-xs font-bold text-gray-600">{participant.ageGroup}</span>
                                 )}
                                 
                                 {/* Compact Attendance History */}

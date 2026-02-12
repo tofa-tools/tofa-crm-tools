@@ -8,7 +8,7 @@ import { brandConfig } from '@tofa/core';
 interface PlayerReportGeneratorProps {
   leadId: number;
   playerName: string;
-  ageCategory: string;
+  ageGroup: string;
   centerName: string;
   onImageGenerated?: (imageBlob: Blob) => void;
 }
@@ -17,7 +17,7 @@ export function usePlayerReportGenerator() {
   const generateAndDownloadReport = async (
     leadId: number,
     playerName: string,
-    ageCategory: string,
+    ageGroup: string,
     centerName: string
   ): Promise<Blob | null> => {
     try {
@@ -45,8 +45,8 @@ export function usePlayerReportGenerator() {
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
               <h1 style="font-size: 24px; font-weight: bold; margin: 0;">${playerName}</h1>
               <div style="text-align: right;">
-                <div style="font-size: 32px; font-weight: bold;">${ageCategory}</div>
-                <div style="font-size: 10px; opacity: 0.9;">Age Category</div>
+                <div style="font-size: 32px; font-weight: bold;">${ageGroup}</div>
+                <div style="font-size: 10px; opacity: 0.9;">Age Group</div>
               </div>
             </div>
             <p style="font-size: 14px; opacity: 0.9; margin: 0;">${centerName}</p>

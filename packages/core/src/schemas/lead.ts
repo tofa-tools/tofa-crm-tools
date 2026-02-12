@@ -10,6 +10,7 @@ export const LeadStatusSchema = z.enum([
   'Followed up with message',
   'Trial Scheduled',
   'Trial Attended',
+  'Payment Pending Verification',
   'Joined',
   'On Break',
   'Nurture',
@@ -37,7 +38,6 @@ export const LeadSchema = z.object({
   id: z.number(),
   created_time: datetimeString.nullable(), // Allow null for edge cases
   player_name: z.string().min(1),
-  player_age_category: z.string(),
   phone: z.string().nullable(), // CRITICAL: Nullable for coach privacy masking (coaches see null)
   email: z.string().nullable(),
   address: z.string().nullable(),
@@ -65,6 +65,10 @@ export const LeadSchema = z.object({
   subscription_end_date: z.string().date().nullable().optional(),
   payment_proof_url: z.string().nullable().optional(),
   call_confirmation_note: z.string().nullable().optional(),
+  // Enrollment flow (public join page → Payment Pending Verification)
+  enrollment_link_sent_at: datetimeString.nullable().optional(),
+  link_expires_at: datetimeString.nullable().optional(),
+  pending_subscription_data: z.record(z.any()).nullable().optional(), // { email, plan, start_date, batch_id, utr_number?, payment_proof_url?, ... }
 });
 
 export type Lead = z.infer<typeof LeadSchema>;
@@ -85,6 +89,8 @@ export const LeadUpdateSchema = z.object({
   subscription_end_date: z.string().date().nullable().optional(),
   payment_proof_url: z.string().nullable().optional(),
   call_confirmation_note: z.string().nullable().optional(),
+  loss_reason: z.string().nullable().optional(),
+  loss_reason_notes: z.string().nullable().optional(),
 });
 
 export type LeadUpdate = z.infer<typeof LeadUpdateSchema>;
@@ -95,7 +101,6 @@ export type LeadUpdate = z.infer<typeof LeadUpdateSchema>;
  */
 export const LeadCreateSchema = z.object({
   player_name: z.string().min(1, 'Player name is required'),
-  player_age_category: z.string().min(1, 'Age category is required'),
   phone: z.string().min(10, 'Valid phone number is required'),
   email: z.string().email('Invalid email format').nullable().optional().or(z.literal('')),
   address: z.string().nullable().optional(),

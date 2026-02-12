@@ -15,9 +15,9 @@ export const UserSchema = z.object({
   id: z.number(),
   email: z.string().email(),
   full_name: z.string().min(1),
+  phone: z.string().nullable().optional(),
   role: UserRoleSchema,
   is_active: z.boolean().optional().default(true),
-  // Optional fields that might come from backend
   center_ids: z.array(z.number()).optional(),
 });
 
@@ -31,6 +31,7 @@ export const UserCreateSchema = z.object({
   email: z.string().email('Invalid email format'),
   password: z.string().min(8, 'Password must be at least 8 characters'),
   full_name: z.string().min(1, 'Full name is required'),
+  phone: z.string().min(1, 'Phone number is required'),
   role: UserRoleSchema,
   center_ids: z.array(z.number()).min(1, 'At least one center must be selected'),
 });
@@ -43,6 +44,7 @@ export type UserCreate = z.infer<typeof UserCreateSchema>;
  */
 export const UserUpdateSchema = z.object({
   full_name: z.string().min(1, 'Full name is required').optional(),
+  phone: z.string().optional().nullable(),
   role: UserRoleSchema.optional(),
   is_active: z.boolean().optional(),
   password: z.string().min(8, 'Password must be at least 8 characters').optional().or(z.literal('')),

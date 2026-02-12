@@ -20,7 +20,9 @@ import confetti from 'canvas-confetti';
 import toast from 'react-hot-toast';
 import { formatDate } from '@/lib/utils';
 import { uploadFile, approvalsAPI, leadsAPI, studentsAPI } from '@/lib/api';
-import { brandConfig, formatMessage, generateWhatsAppLink } from '@tofa/core';
+import { useMutation } from '@tanstack/react-query';
+import { RequestCorrectionModal } from '@/components/leads/RequestCorrectionModal';
+import { brandConfig, formatMessage, generateWhatsAppLink, LOSS_REASONS } from '@tofa/core';
 import { 
   SUBSCRIPTION_PLANS, 
   calculateSubscriptionEndDate,
@@ -34,8 +36,8 @@ import {
   validateJoiningComplete,
   validateOffRamp,
   validateReversalRequest,
-  filterBatchesByAgeCategory,
-  calculateAgeCategory,
+  filterBatchesByCenter,
+  calculateAge,
   type JoiningData,
   type OffRampData
 } from '@tofa/core';
@@ -53,6 +55,7 @@ const STATUS_OPTIONS: LeadStatus[] = [
   'Followed up with message',
   'Trial Scheduled',
   'Trial Attended',
+  'Payment Pending Verification',
   'Joined',
   'On Break',
   'Nurture',
@@ -81,6 +84,13 @@ function formatBatchTime(startTime: string | null | undefined, endTime: string |
   const start = startTime.substring(0, 5); // Get HH:MM
   const end = endTime.substring(0, 5); // Get HH:MM
   return `${start} - ${end}`;
+}
+
+// Helper for dropdown label: age range for rep's information only (not used for filtering)
+function formatBatchAgeRange(batch: Batch): string {
+  const min = batch.min_age ?? 0;
+  const max = batch.max_age ?? 99;
+  return `Ages ${min}-${max}`;
 }
 
 // Attendance Summary Component for Student Profile
@@ -204,8 +214,10 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
   const [showReversalForm, setShowReversalForm] = useState<boolean>(false);
   const [reversalReason, setReversalReason] = useState<string>('');
   const [pendingApproval, setPendingApproval] = useState<boolean>(false);
+  const [showDeactivateRequest, setShowDeactivateRequest] = useState<boolean>(false);
+  const [deactivateReason, setDeactivateReason] = useState<string>('');
+  const [showRequestCorrectionModal, setShowRequestCorrectionModal] = useState<boolean>(false);
   const [pendingApprovalReason, setPendingApprovalReason] = useState<string>('');
-  const [isUpdatingCategory, setIsUpdatingCategory] = useState<boolean>(false);
   
   // Milestone state
   const [milestoneData, setMilestoneData] = useState<{
@@ -216,16 +228,7 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
   } | null>(null);
   const [isLoadingMilestones, setIsLoadingMilestones] = useState<boolean>(false);
 
-  const LOSS_REASON_OPTIONS = [
-    'Timing Mismatch',
-    'Days Mismatch',
-    'Duration too long',
-    'Location/Distance',
-    'Coaching Quality',
-    'Price/Fees',
-    'Kid lost interest',
-    'Other',
-  ];
+  // Mandatory reason when moving to Nurture or Dead (Intelligent Off-Ramp) — uses shared LOSS_REASONS from core
 
   // Initialize form when lead changes
   useEffect(() => {
@@ -271,19 +274,27 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
     }
   }, [lead, studentRecord]);
 
-  // Check for pending approval requests
+  // Check for pending approval requests (and specifically pending DEACTIVATE for global lock)
+  const [pendingDeactivate, setPendingDeactivate] = useState<boolean>(false);
   useEffect(() => {
     if (lead && lead.id) {
       approvalsAPI.getLeadRequests(lead.id).then(response => {
-        const pendingRequest = response.requests.find(req => req.request_status === 'pending');
+        const requests = response.requests || [];
+        const pendingRequest = requests.find((req: any) => req.request_status === 'pending');
         const hasPending = !!pendingRequest;
         setPendingApproval(hasPending);
         setPendingApprovalReason(pendingRequest?.reason || '');
+        const deactivatePending = requests.some(
+          (req: any) => req.type === 'DEACTIVATE' && req.request_status === 'pending'
+        );
+        setPendingDeactivate(!!deactivatePending);
       }).catch(() => {
-        // Ignore errors - approval system might not be set up yet
         setPendingApproval(false);
         setPendingApprovalReason('');
+        setPendingDeactivate(false);
       });
+    } else {
+      setPendingDeactivate(false);
     }
   }, [lead]);
 
@@ -328,6 +339,54 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
   const isCoach = user?.role === 'coach';
   const isObserver = user?.role === 'observer';
   const canEdit = !isCoach && !isObserver;
+  const isTeamMember = user?.role === 'team_member';
+  const isTeamLead = user?.role === 'team_lead';
+  // Team members cannot directly edit Center, Batches, or Subscription on Active Student profile
+  const canEditStudentProfile = canEdit && user?.role === 'team_lead';
+
+  const sendEnrollmentLinkMutation = useMutation({
+    mutationFn: (leadId: number) => leadsAPI.sendEnrollmentLink(leadId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.detail || 'Failed to send link'),
+  });
+
+  const handleSendEnrollmentLink = async () => {
+    if (!lead?.phone) {
+      toast.error('Lead phone number is missing – cannot open WhatsApp');
+      return;
+    }
+    try {
+      await sendEnrollmentLinkMutation.mutateAsync(lead.id);
+      const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
+      const enrollmentLink = lead.public_token ? `${baseUrl}/join/${lead.public_token}` : '';
+      if (enrollmentLink) {
+        const message = formatMessage(brandConfig.messages.enrollmentLink, {
+          playerName: lead.player_name,
+          academyName: brandConfig.name,
+          enrollmentLink,
+        });
+        const whatsappUrl = generateWhatsAppLink(lead.phone, message);
+        window.open(whatsappUrl, '_blank');
+        navigator.clipboard.writeText(enrollmentLink);
+        toast.success('Opening WhatsApp with enrollment link (link also copied to clipboard)');
+      } else {
+        toast.success('Enrollment link sent!');
+      }
+    } catch {
+      // Error already shown by mutation onError
+    }
+  };
+  const verifyAndEnrollMutation = useMutation({
+    mutationFn: (leadId: number) => leadsAPI.verifyAndEnroll(leadId),
+    onSuccess: () => {
+      toast.success('Student enrolled! Welcome email sent.');
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      onJoined?.(lead!.id, lead!.player_name);
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.detail || 'Failed to verify'),
+  });
 
   // Get coach trial feedback
   const coachTrialFeedback = useMemo(() => {
@@ -339,17 +398,15 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
     return null;
   }, [lead?.extra_data]);
 
-  // Technical category from DOB (for age-migration alert)
-  const technicalCategory = lead?.date_of_birth ? calculateAgeCategory(lead.date_of_birth) : null;
-  const showAgeMismatch = technicalCategory != null && lead != null && lead.player_age_category !== technicalCategory;
+  // Lead's age from DOB (display only; batch dropdowns use center-only filter)
+  const leadAge = lead?.date_of_birth ? calculateAge(lead.date_of_birth) : null;
 
-  // Filter batches by center and age category - only show ACTIVE batches (use lead's current category)
-  const trialBatches = lead && lead.center_id 
-    ? filterBatchesByAgeCategory(allBatches, lead.player_age_category, lead.center_id)
+  // Filter batches by center only (no age filter) so dropdowns show batches even when DOB is missing
+  const trialBatches = lead && lead.center_id
+    ? filterBatchesByCenter(allBatches, lead.center_id)
     : [];
-  
   const studentBatches = lead && lead.center_id
-    ? filterBatchesByAgeCategory(allBatches, lead.player_age_category, lead.center_id)
+    ? filterBatchesByCenter(allBatches, lead.center_id)
     : [];
 
   // Generate WhatsApp message with preference link
@@ -483,6 +540,28 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
     }
   };
 
+  // Sidharth case: lead is Trial Scheduled but trial_batch_id is null — force rep to set batch before other updates
+  const mustSetTrialBatch = currentStatus === 'Trial Scheduled' && (lead.trial_batch_id == null || lead.trial_batch_id === undefined);
+
+  const handleSaveTrialBatchOnly = async () => {
+    if (!trialBatchId) {
+      toast.error('Please select a trial batch.');
+      return;
+    }
+    try {
+      await updateLeadMutation.mutateAsync({
+        leadId: lead.id,
+        update: { trial_batch_id: trialBatchId },
+      });
+      queryClient.invalidateQueries({ queryKey: ['leads'] });
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      toast.success('Trial batch saved. You can now update other fields.');
+    } catch (error: any) {
+      const msg = error?.response?.data?.detail || error?.message || 'Failed to save trial batch';
+      toast.error(msg);
+    }
+  };
+
 
   // Step 4: Complete Joining
   const handleCompleteJoining = async () => {
@@ -499,8 +578,8 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
     }
 
     try {
-      // Use convertLead endpoint instead of updateLead
-      await leadsAPI.convertLead(lead.id, {
+      // Use convertLead endpoint instead of updateLead (returns created student with id)
+      const student = await leadsAPI.convertLead(lead.id, {
         subscription_plan: subscriptionPlan,
         subscription_start_date: subscriptionStartDate,
         subscription_end_date: subscriptionEndDate || undefined,
@@ -508,12 +587,21 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
         student_batch_ids: studentBatchIds,
       });
 
+      // Trigger welcome email after successful joining (non-blocking; log on failure)
+      if (student?.id) {
+        studentsAPI.sendWelcomeEmail(student.id).then(() => {
+          toast.success('Welcome email sent to parent.');
+        }).catch((err: any) => {
+          console.warn('Welcome email failed:', err);
+          toast.error(err?.response?.data?.detail || 'Welcome email could not be sent.');
+        });
+      }
+
       confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });
       if (onJoined) {
         onJoined(lead.id, lead.player_name);
       }
 
-      // Invalidate all relevant queries
       queryClient.invalidateQueries({ queryKey: ['leads'] });
       queryClient.invalidateQueries({ queryKey: ['students'] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
@@ -571,24 +659,30 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
 
   // getPreviousStatus now imported from @/lib/logic/leads
 
-  // Handle Off-Ramp (Move to Nurture, Dead, or On Break)
+  // Handle Off-Ramp (Move to Nurture, Dead, or On Break) — Intelligent Off-Ramp: reason + notes
   const handleOffRamp = async () => {
-    if (!offRampStatus || !offRampNote.trim()) {
-      if (offRampStatus === 'On Break') {
+    if (!offRampStatus) return;
+
+    if (offRampStatus === 'On Break') {
+      if (!breakReason.trim() || !breakReturnDate) {
         toast.error('Please provide both a reason and return date');
         return;
       }
-      toast.error(offRampStatus === 'Dead/Not Interested' ? 'Please provide a reason' : 'Please provide a note');
-      return;
-    }
-
-    // On Break requires both reason and return date
-    if (offRampStatus === 'On Break' && !breakReason.trim()) {
-      toast.error('Please provide a reason for the break');
-      return;
-    }
-    if (offRampStatus === 'On Break' && !breakReturnDate) {
-      toast.error('Please provide a return date');
+    } else if (offRampStatus === 'Nurture' || offRampStatus === 'Dead/Not Interested') {
+      if (!lossReason.trim()) {
+        toast.error('Please select a reason');
+        return;
+      }
+      if (lossReason === 'Other' && !lossReasonNotes.trim()) {
+        toast.error('Please provide details for "Other"');
+        return;
+      }
+      if (offRampStatus === 'Nurture' && !nextDate) {
+        toast.error('Please set the next follow-up date');
+        return;
+      }
+    } else if (!offRampNote.trim()) {
+      toast.error('Please provide a note');
       return;
     }
 
@@ -597,17 +691,14 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
         leadId: lead.id,
         update: {
           status: offRampStatus,
-          comment: offRampNote.trim(),
-          ...(offRampStatus === 'Dead/Not Interested' ? {
-            loss_reason: 'Other',
-            loss_reason_notes: offRampNote.trim(),
+          comment: offRampNote.trim() || undefined,
+          ...(offRampStatus === 'Dead/Not Interested' || offRampStatus === 'Nurture' ? {
+            loss_reason: lossReason.trim(),
+            loss_reason_notes: lossReason === 'Other' ? (lossReasonNotes?.trim() || '') : (lossReasonNotes?.trim() || undefined),
           } : {}),
-          ...(offRampStatus === 'Nurture' ? {
-            next_date: nextDate || undefined,
-          } : {}),
+          ...(offRampStatus === 'Nurture' ? { next_date: nextDate || undefined } : {}),
           ...(offRampStatus === 'On Break' ? {
             next_date: breakReturnDate,
-            // Store break reason in comment field
             comment: `Break Reason: ${breakReason.trim()}\n\nNotes: ${offRampNote.trim()}`,
           } : {}),
         },
@@ -678,11 +769,12 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
     }
 
     try {
-      await approvalsAPI.createRequest({
+      await approvalsAPI.createApprovalRequest({
+        request_type: 'STATUS_REVERSAL',
         lead_id: lead.id,
-        current_status: currentStatus,
-        requested_status: previousStatus,
         reason: reversalReason.trim(),
+        current_value: currentStatus,
+        requested_value: previousStatus,
       });
 
       queryClient.invalidateQueries({ queryKey: ['leads'] });
@@ -704,8 +796,19 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
         className="bg-white rounded-[32px] shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col" 
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Pending Approval Banner */}
-        {pendingApproval && (
+        {/* Deactivation Pending: global lock */}
+        {pendingDeactivate && (
+          <div className="bg-red-50 border-b-4 border-red-600 p-4">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">🛑</span>
+              <div className="flex-1">
+                <h3 className="text-sm font-bold text-red-900">Deactivation Pending: All operations are locked until the Team Lead resolves this request.</h3>
+              </div>
+            </div>
+          </div>
+        )}
+        {/* Pending Approval Banner (other request types) */}
+        {pendingApproval && !pendingDeactivate && (
           <div className="bg-yellow-50 border-b-4 border-yellow-500 p-4">
             <div className="flex items-center gap-3">
               <span className="text-2xl">⏳</span>
@@ -745,61 +848,48 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
             </div>
             <div className="flex items-center gap-3 flex-wrap">
               <span className="text-sm text-gray-500 font-medium">
-                {lead.player_age_category}
+                {leadAge != null ? `Age: ${leadAge}` : '—'}
               </span>
-              {showAgeMismatch && technicalCategory && (
-                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-50 border border-amber-200 text-amber-800 text-xs font-medium" title={`Technical category from DOB: ${technicalCategory}`}>
-                  <span aria-hidden>⚠️</span>
-                  <span>Aged Up: Should be {technicalCategory}</span>
-                </span>
-              )}
-              {showAgeMismatch && technicalCategory && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    if (!lead) return;
-                    setIsUpdatingCategory(true);
-                    try {
-                      if (user?.role === 'team_lead') {
-                        await leadsAPI.updateAgeCategory(lead.id, technicalCategory);
-                        queryClient.invalidateQueries({ queryKey: ['leads'] });
-                        queryClient.invalidateQueries({ queryKey: ['tasks'] });
-                        toast.success(`Category updated to ${technicalCategory}`);
-                      } else {
-                        await approvalsAPI.createAgeCategoryRequest({
-                          lead_id: lead.id,
-                          requested_category: technicalCategory,
-                          reason: `Aged up; update to ${technicalCategory} requested.`,
-                        });
-                        toast.success('Category change requested. A team lead will approve.');
-                        queryClient.invalidateQueries({ queryKey: ['approvals'] });
-                      }
-                    } catch (err: unknown) {
-                      const detail = err && typeof err === 'object' && 'response' in err && typeof (err as { response?: { data?: { detail?: string } } }).response?.data?.detail === 'string'
-                        ? (err as { response: { data: { detail: string } } }).response.data.detail
-                        : 'Failed to update category';
-                      toast.error(detail);
-                    } finally {
-                      setIsUpdatingCategory(false);
-                    }
-                  }}
-                  disabled={isUpdatingCategory}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-amber-100 hover:bg-amber-200 text-amber-900 text-xs font-medium transition-colors disabled:opacity-50"
-                >
-                  {isUpdatingCategory ? <span className="animate-spin">⟳</span> : <span>🔄 Update Category</span>}
-                </button>
-              )}
               <span className="text-xs font-bold text-gray-400">ID: #{lead.id}</span>
             </div>
           </div>
-          <button 
-            onClick={onClose} 
-            className="p-3 hover:bg-gray-200 rounded-full transition-colors"
-            aria-label="Close"
-          >
-            <X className="h-6 w-6 text-gray-500" />
-          </button>
+          <div className="flex items-center gap-2">
+            {canEdit && user?.role !== 'team_lead' && !pendingDeactivate && (
+              <button
+                type="button"
+                onClick={() => setShowRequestCorrectionModal(true)}
+                className="flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-xl border-2 border-amber-600 shadow-md transition-colors"
+                title="Need to revert status, fix DOB, or request a change? Use this to submit a correction request."
+              >
+                <span>🛠️</span>
+                Request Data Correction
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="p-3 hover:bg-gray-200 rounded-full transition-colors"
+              aria-label="Close"
+            >
+              <X className="h-6 w-6 text-gray-500" />
+            </button>
+          </div>
         </div>
+
+        {showRequestCorrectionModal && (
+          <RequestCorrectionModal
+            isOpen={showRequestCorrectionModal}
+            onClose={() => setShowRequestCorrectionModal(false)}
+            lead={lead}
+            studentRecord={studentRecord ? { id: studentRecord.id, center_id: studentRecord.center_id, lead_id: studentRecord.lead_id } : null}
+            userRole={user?.role || ''}
+    onSuccess={() => {
+              queryClient.invalidateQueries({ queryKey: ['approvals'] });
+              queryClient.invalidateQueries({ queryKey: ['leads'] });
+              queryClient.invalidateQueries({ queryKey: ['students'] });
+              queryClient.invalidateQueries({ queryKey: ['batches'] });
+            }}
+          />
+        )}
 
         {/* Observer Read-Only Banner */}
         {isObserver && (
@@ -812,8 +902,8 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
           </div>
         )}
 
-        {/* Scrollable Content */}
-        <div className="p-8 overflow-y-auto space-y-8 flex-1">
+        {/* Scrollable Content — locked when deactivation pending */}
+        <div className={`p-8 overflow-y-auto space-y-8 flex-1 relative ${pendingDeactivate ? 'pointer-events-none opacity-70' : ''}`}>
           {/* Contact Section */}
           <div className="grid grid-cols-2 gap-4">
             <div className="bg-brand-accent/10 p-5 rounded-2xl border border-brand-accent/20">
@@ -834,8 +924,54 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
             )}
           </div>
 
+          {/* Sidharth case: Trial Scheduled but no trial batch set — force selection before any other updates */}
+          {mustSetTrialBatch && (
+            <div className="p-6 bg-amber-50 border-2 border-amber-400 rounded-2xl space-y-4">
+              <p className="text-sm font-bold text-amber-900">
+                ⚠️ This lead is marked Trial Scheduled but no trial batch is set. Select a batch and save below before making other updates.
+              </p>
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-gray-700">Trial/Demo Batch <span className="text-red-500">*</span></label>
+                <Select
+                  value={trialBatchId ?? ''}
+                  onChange={(e) => {
+                    const id = Number(e.target.value) || null;
+                    setTrialBatchId(id);
+                  }}
+                  disabled={!canEdit}
+                  options={[
+                    { value: '', label: 'Select Batch...' },
+                    ...trialBatches.map(b => {
+                      const scheduleDays = formatBatchScheduleDays(b);
+                      const timeRange = formatBatchTime(b.start_time, b.end_time);
+                      const ageRange = formatBatchAgeRange(b);
+                      return {
+                        value: String(b.id),
+                        label: `${b.name} (${ageRange}) • ${scheduleDays} | ${timeRange}`,
+                      };
+                    }),
+                  ]}
+                />
+                {trialBatches.length === 0 && (
+                  <p className="text-sm text-amber-700">No active batches found for this Center.</p>
+                )}
+              </div>
+              {!isObserver && (
+                <Button
+                  onClick={handleSaveTrialBatchOnly}
+                  disabled={!canEdit || !trialBatchId || updateLeadMutation.isPending}
+                  variant="primary"
+                  size="lg"
+                  className="w-full"
+                >
+                  {updateLeadMutation.isPending ? 'Saving...' : 'Save Trial Batch'}
+                </Button>
+              )}
+            </div>
+          )}
+
           {/* Parent Input Section - Read-only Reference (Hidden for Active Members) */}
-          {currentStatus !== 'Joined' && (lead.preferred_batch_id || lead.preferred_call_time || lead.preferred_timing_notes) && (
+          {!mustSetTrialBatch && currentStatus !== 'Joined' && (lead.preferred_batch_id || lead.preferred_call_time || lead.preferred_timing_notes) && (
             <div className="p-5 bg-gradient-to-r from-brand-accent/10 to-brand-accent/5 border-2 border-brand-accent/30 rounded-2xl shadow-sm">
               <p className="text-xs font-black text-brand-primary uppercase tracking-widest mb-4 font-bebas">
                 📋 Parent Input
@@ -869,15 +1005,15 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
           )}
 
           {/* Coach Trial Feedback */}
-          {coachTrialFeedback && (
+          {!mustSetTrialBatch && coachTrialFeedback && (
             <div className="p-4 bg-purple-50 border-2 border-purple-200 rounded-2xl">
               <p className="text-xs font-bold text-brand-primary uppercase tracking-widest mb-2">💡 Coach's Tip</p>
               <p className="text-sm text-gray-900">{coachTrialFeedback.note || ''}</p>
             </div>
           )}
 
-          {/* GUIDED WORKFLOW */}
-          {showGuidedWorkflow && (
+          {/* GUIDED WORKFLOW — hidden when mustSetTrialBatch so rep must set batch first */}
+          {!mustSetTrialBatch && showGuidedWorkflow && (
             <div className="space-y-6 border-t pt-6">
               {/* Step 1: New - Send Preference Link (Skip if parent already provided preferences) */}
               {currentStatus === 'New' && !hasParentPreferences && (
@@ -1007,13 +1143,21 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                           const isPreferred = b.id === lead?.preferred_batch_id;
                           const scheduleDays = formatBatchScheduleDays(b);
                           const timeRange = formatBatchTime(b.start_time, b.end_time);
+                          const ageRange = formatBatchAgeRange(b);
                             return {
                               value: String(b.id),
-                              label: `${b.name} (${scheduleDays} | ${timeRange})${isPreferred ? ' ⭐ Parent Preferred' : ''}`
+                              label: `${b.name} (${ageRange}) • ${scheduleDays} | ${timeRange}${isPreferred ? ' ⭐ Parent Preferred' : ''}`
                             };
                           })
                         ]}
                       />
+                      {trialBatches.length === 0 && (
+                        <p className="text-sm text-amber-700 mt-2">
+                          {!lead?.center_id
+                            ? 'Assign a center to this lead to see batches.'
+                            : 'No active batches found for this Center.'}
+                        </p>
+                      )}
                     </div>
 
                     <div className="space-y-2">
@@ -1029,25 +1173,15 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                     </div>
 
                     {!isObserver && (
-                      <div className="flex gap-3">
-                        <Button
-                          onClick={handleScheduleTrial}
-                          disabled={!canEdit || !trialBatchId || updateLeadMutation.isPending || pendingApproval}
-                          variant="primary"
-                          size="lg"
-                          className="flex-1"
-                        >
-                          {updateLeadMutation.isPending ? 'Scheduling...' : '✓ Schedule Trial'}
-                        </Button>
-                        <Button
-                          onClick={handleRevertStatus}
-                          disabled={pendingApproval}
-                          variant="secondary"
-                          size="md"
-                        >
-                          ⏮️ Mistake? Revert status
-                        </Button>
-                      </div>
+                      <Button
+                        onClick={handleScheduleTrial}
+                        disabled={!canEdit || !trialBatchId || updateLeadMutation.isPending || pendingApproval}
+                        variant="primary"
+                        size="lg"
+                        className="w-full"
+                      >
+                        {updateLeadMutation.isPending ? 'Scheduling...' : '✓ Schedule Trial'}
+                      </Button>
                     )}
                     {showReversalForm && user?.role !== 'team_lead' && (
                       <div className="mt-4 p-4 bg-gray-50 border border-gray-200 rounded-xl">
@@ -1086,7 +1220,7 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                 </div>
               )}
 
-              {/* Step 4: Trial Attended - Finalize Enrollment */}
+              {/* Step 4: Trial Attended - Send Enrollment Link (Center Head / Team Member) */}
               {currentStatus === 'Trial Attended' && (
                 <div className="space-y-4">
                   <div className="flex items-center gap-3 mb-4">
@@ -1094,224 +1228,85 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                       4
                     </div>
                     <div className="flex-1">
-                      <h3 className="text-[10px] font-semibold text-slate-500 uppercase tracking-[0.2em]">Finalize Enrollment</h3>
+                      <h3 className="text-[10px] font-semibold text-slate-500 uppercase tracking-[0.2em]">Send Enrollment Link</h3>
                       <div className="mt-1 h-px bg-gray-200"></div>
                     </div>
                   </div>
-                  
-                  <div className="space-y-4 p-5 bg-green-50 border border-green-200 rounded-2xl">
-                    {/* Batch Selection for Student */}
-                    <div className="space-y-2">
-                      <label className="text-xs font-medium text-gray-700 mb-2">
-                        Assign to Batch(es) <span className="text-red-500">*</span>
-                      </label>
-                      <div className="space-y-2 max-h-48 overflow-y-auto">
-                        {studentBatches.map(batch => (
-                          <label key={batch.id} className="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded-lg cursor-pointer hover:bg-gray-50">
-                            <input
-                              type="checkbox"
-                              checked={studentBatchIds.includes(batch.id)}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setStudentBatchIds([...studentBatchIds, batch.id]);
-                                } else {
-                                  setStudentBatchIds(studentBatchIds.filter(id => id !== batch.id));
-                                }
-                              }}
-                              disabled={!canEdit}
-                              className="w-5 h-5 rounded border-gray-300 text-green-600 focus:ring-green-500"
-                            />
-                            <div className="flex-1">
-                              <span className="font-semibold text-gray-900">{batch.name}</span>
-                              <span className="text-xs text-gray-500 ml-2">
-                                ({formatBatchScheduleDays(batch)} | {formatBatchTime(batch.start_time, batch.end_time)})
-                              </span>
-                            </div>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
 
-                    {/* Payment Confirmation */}
-                    <div className="space-y-4 border-t pt-4">
-                      <label className="flex items-center gap-3 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={paymentConfirmed}
-                          onChange={(e) => setPaymentConfirmed(e.target.checked)}
-                          disabled={!canEdit}
-                          className="w-5 h-5 rounded border-gray-300 text-green-600 focus:ring-green-500 disabled:opacity-50"
-                        />
-                        <span className="font-semibold text-gray-900">Payment Confirmed</span>
-                      </label>
-
-                      <div className="space-y-2">
-                        <label className="text-xs font-medium text-gray-700 mb-2">
-                          Payment Reference (Optional)
-                        </label>
-                        <input
-                          type="text"
-                          value={paymentReference}
-                          onChange={(e) => setPaymentReference(e.target.value)}
-                          disabled={!canEdit}
-                          placeholder="Transaction ID, Receipt Number, etc."
-                          className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <label className="text-xs font-medium text-gray-700 mb-2">
-                          Payment Proof (Optional)
-                        </label>
-                        <label className={`flex items-center justify-center gap-2 p-4 bg-white border-2 border-dashed rounded-xl transition-colors ${
-                          isUploadingImage 
-                            ? 'border-brand-accent/30 bg-brand-accent/10 cursor-wait' 
-                            : 'border-gray-300 hover:bg-gray-50 cursor-pointer'
-                        } disabled:opacity-50 disabled:cursor-not-allowed`}>
-                          {isUploadingImage ? (
-                            <>
-                              <Loader2 className="w-5 h-5 text-brand-accent animate-spin" />
-                              <span className="text-sm font-medium text-blue-700">Uploading proof...</span>
-                            </>
-                          ) : (
-                            <>
-                              <Upload className="w-5 h-5 text-gray-500" />
-                              <span className="text-sm font-medium text-gray-700">
-                                {paymentProofUrl ? 'Change Image' : 'Upload Payment Proof'}
-                              </span>
-                            </>
-                          )}
-                          <input
-                            type="file"
-                            accept="image/*"
-                            onChange={handleImageUpload}
-                            disabled={!canEdit || isUploadingImage}
-                            className="hidden"
-                          />
-                        </label>
-                        {uploadedImagePreview && (
-                          <div className="mt-2 p-3 bg-white border border-gray-200 rounded-xl">
-                            <p className="text-xs font-semibold text-gray-600 mb-2">Uploaded Proof:</p>
-                            <img 
-                              src={uploadedImagePreview} 
-                              alt="Payment proof" 
-                              className="w-full max-w-xs h-auto rounded-lg border border-gray-200"
-                              onError={(e) => {
-                                // Fallback if image fails to load
-                                e.currentTarget.style.display = 'none';
-                              }}
-                            />
-                            {paymentProofUrl && (
-                              <p className="text-xs text-green-600 font-medium mt-2">✓ Proof saved successfully</p>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Subscription Details */}
-                      <div className="space-y-4 border-t pt-4">
-                        <h4 className="text-sm font-bold text-gray-900">Subscription Details</h4>
-                        
-                        <div className="space-y-2">
-                          <label className="text-xs font-medium text-gray-700 mb-2">
-                            Subscription Plan <span className="text-red-500">*</span>
-                          </label>
-                          <select
-                            value={subscriptionPlan}
-                            onChange={(e) => setSubscriptionPlan(e.target.value)}
-                            disabled={!canEdit}
-                            className="w-full p-3 bg-white border border-gray-200 rounded-xl font-medium outline-none disabled:bg-gray-100 disabled:cursor-not-allowed focus:ring-2 focus:ring-green-500 focus:border-green-500"
-                          >
-                            <option value="">Select Plan...</option>
-                            {SUBSCRIPTION_PLANS.map(plan => (
-                              <option key={plan.value} value={plan.value}>
-                                {plan.label}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div className="space-y-2">
-                          <label className="text-xs font-medium text-gray-700 mb-2">
-                            Subscription Start Date <span className="text-red-500">*</span>
-                          </label>
-                          <input
-                            type="date"
-                            value={subscriptionStartDate}
-                            onChange={(e) => setSubscriptionStartDate(e.target.value)}
-                            disabled={!canEdit}
-                            className="w-full p-3 bg-white border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
-                          />
-                        </div>
-
-                        {subscriptionEndDate && (
-                          <div className="p-3 bg-white border border-gray-200 rounded-xl">
-                            <p className="text-xs font-semibold text-gray-600 mb-1">End Date (Auto-calculated)</p>
-                            <p className="text-sm font-bold text-gray-900">{formatDate(subscriptionEndDate)}</p>
-                          </div>
-                        )}
-                      </div>
-
-                      {!isObserver && (
-                        <div className="flex gap-3">
-                          <Button
-                            onClick={handleCompleteJoining}
-                            disabled={!canEdit || !paymentConfirmed || !studentBatchIds.length || !subscriptionPlan || !subscriptionStartDate || updateLeadMutation.isPending || pendingApproval}
-                            variant="primary"
-                            size="lg"
-                            className="flex-1"
-                          >
-                            {updateLeadMutation.isPending ? 'Completing...' : '🎉 Complete Joining'}
-                          </Button>
-                          <Button
-                            onClick={handleRevertStatus}
-                            disabled={pendingApproval}
-                            variant="secondary"
-                            size="md"
-                          >
-                            ⏮️ Mistake? Revert status
-                          </Button>
-                        </div>
+                  <div className="p-5 bg-green-50 border border-green-200 rounded-2xl space-y-4">
+                    <p className="text-sm text-gray-700">Send the enrollment link to the parent. They will choose a plan, pay via UPI, and upload proof. After verification by Team Lead, the student will be enrolled.</p>
+                    <Button
+                      onClick={handleSendEnrollmentLink}
+                      disabled={!lead || sendEnrollmentLinkMutation.isPending}
+                      variant="primary"
+                      size="lg"
+                      className="w-full"
+                    >
+                      {sendEnrollmentLinkMutation.isPending ? (
+                        <><Loader2 className="w-4 h-4 animate-spin inline mr-2" /> Sending...</>
+                      ) : (
+                        <>📱 Send Enrollment Link</>
                       )}
-                      {showReversalForm && user?.role !== 'team_lead' && (
-                        <div className="mt-4 p-4 bg-gray-50 border border-gray-200 rounded-xl">
-                          <label className="block text-xs font-semibold text-gray-700 mb-2">
-                            Reason for Reversal Request <span className="text-red-500">*</span>
-                          </label>
-                          <textarea
-                            value={reversalReason}
-                            onChange={(e) => setReversalReason(e.target.value)}
-                            placeholder="Explain why you need to revert the status (min 5 characters)..."
-                            rows={3}
-                            className="w-full p-2 text-sm bg-white border border-gray-300 rounded-lg outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                            minLength={5}
-                          />
-                          <div className="flex gap-2 mt-3">
-                            <button
-                              onClick={handleSubmitReversalRequest}
-                              disabled={!reversalReason.trim() || reversalReason.trim().length < 5}
-                              className="flex-1 py-2 bg-gradient-to-r from-yellow-500 via-amber-600 to-yellow-700 text-white text-sm font-medium rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
-                            >
-                              Send Reversal Request
-                            </button>
-                            <button
-                              onClick={() => {
-                                setShowReversalForm(false);
-                                setReversalReason('');
-                              }}
-                              className="px-4 py-2 bg-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-300"
-                            >
-                              Cancel
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
+                    </Button>
+                    {(lead as any)?.enrollment_link_sent_at && (
+                      <p className="text-xs text-green-700">✓ Link sent on {formatDate((lead as any).enrollment_link_sent_at)}</p>
+                    )}
                   </div>
                 </div>
               )}
-            </div>
-          )}
+
+              {/* Step 4b: Payment Pending Verification - Audit Box (Team Lead only) */}
+              {currentStatus === 'Payment Pending Verification' && isTeamLead && (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="flex items-center justify-center w-10 h-10 rounded-full bg-amber-100 text-amber-600 font-bold">
+                      4
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-[10px] font-semibold text-slate-500 uppercase tracking-[0.2em]">Verify & Enroll</h3>
+                      <div className="mt-1 h-px bg-gray-200"></div>
+                    </div>
+                  </div>
+
+                  <div className="p-5 bg-amber-50 border-2 border-amber-300 rounded-2xl space-y-4">
+                    {(() => {
+                      const pending = (lead as any)?.pending_subscription_data;
+                      if (!pending || typeof pending !== 'object') return <p className="text-sm text-gray-600">No pending data.</p>;
+                      return (
+                        <>
+                          <p className="text-sm font-semibold text-gray-800">Parent&apos;s choices:</p>
+                          <div className="grid gap-2 text-sm">
+                            <div><span className="text-gray-500">Plan:</span> <span className="font-medium">{pending.subscription_plan || '—'}</span></div>
+                            <div><span className="text-gray-500">Start date:</span> <span className="font-medium">{pending.start_date ? formatDate(pending.start_date) : '—'}</span></div>
+                            <div><span className="text-gray-500">UTR:</span> <span className="font-mono font-medium">{pending.utr_number || '—'}</span></div>
+                          </div>
+                          {pending.payment_proof_url && (
+                            <div>
+                              <p className="text-xs text-gray-500 mb-1">Payment screenshot:</p>
+                              <a href={pending.payment_proof_url} target="_blank" rel="noopener noreferrer" className="block w-20 h-20 rounded-lg overflow-hidden border-2 border-amber-400 hover:border-amber-600">
+                                <img src={pending.payment_proof_url} alt="Proof" className="w-full h-full object-cover" />
+                              </a>
+                            </div>
+                          )}
+                          <Button
+                            onClick={() => lead && verifyAndEnrollMutation.mutate(lead.id)}
+                            disabled={!lead || verifyAndEnrollMutation.isPending}
+                            variant="primary"
+                            size="lg"
+                            className="w-full"
+                          >
+                            {verifyAndEnrollMutation.isPending ? (
+                              <><Loader2 className="w-4 h-4 animate-spin inline mr-2" /> Verifying...</>
+                            ) : (
+                              <>✅ Verify & Enroll Student</>
+                            )}
+                          </Button>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
 
           {/* ON BREAK STATUS: Re-activation Section */}
           {currentStatus === 'On Break' && (() => {
@@ -1540,6 +1535,8 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
               </div>
             </div>
           )}
+            </div>
+          )}
 
           {/* ACTIVE STUDENT PROFILE VIEW (for Joined status) */}
           {currentStatus === 'Joined' && studentRecord && (
@@ -1660,8 +1657,8 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                 )}
               </div>
 
-              {/* Center Selection (Transfer Governance) */}
-              {canEdit && (
+              {/* Center Selection (Transfer Governance) — Team Lead only; Team Member sees read-only */}
+              {canEditStudentProfile && (
                 <div className="p-5 bg-white border-2 border-green-200 rounded-2xl">
                   <h3 className="text-sm font-black text-gray-700 uppercase tracking-widest mb-4">
                     🏢 Center Assignment
@@ -1686,13 +1683,7 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                           
                           setStudentCenterId(newCenterId);
                         }}
-                        disabled={user?.role !== 'team_lead'}
-                        className={`w-full p-3 bg-white border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 ${
-                          user?.role !== 'team_lead' 
-                            ? 'bg-gray-100 cursor-not-allowed opacity-60' 
-                            : ''
-                        }`}
-                        title={user?.role !== 'team_lead' ? 'Contact Team Lead for center transfers.' : undefined}
+                        className="w-full p-3 bg-white border border-gray-200 rounded-xl font-medium outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
                       >
                         <option value="">Select Center...</option>
                         {allCenters.map(center => (
@@ -1701,15 +1692,10 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                           </option>
                         ))}
                       </select>
-                      {user?.role !== 'team_lead' && (
-                        <div className="absolute inset-0 flex items-center justify-end pr-3 pointer-events-none">
-                          <span className="text-xs text-gray-500 italic">Read-only</span>
-                        </div>
-                      )}
                     </div>
                     
                     {/* Center Transfer Warning */}
-                    {showCenterTransferWarning && user?.role === 'team_lead' && (
+                    {showCenterTransferWarning && (
                       <div className="p-3 bg-yellow-50 border-2 border-yellow-300 rounded-xl">
                         <div className="flex items-start gap-2">
                           <span className="text-xl">⚠️</span>
@@ -1725,53 +1711,72 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                       </div>
                     )}
                     
-                    {/* Update Center Button (only show if center changed) */}
-                    {showCenterTransferWarning && user?.role === 'team_lead' && studentCenterId && studentCenterId !== (studentRecord?.center_id || lead?.center_id) && (
-                      <button
-                        onClick={async () => {
-                          if (!studentCenterId) {
-                            toast.error('Please select a center');
-                            return;
-                          }
-                          
-                          try {
-                            await updateStudentMutation.mutateAsync({
-                              studentId: studentRecord.id,
-                              data: {
-                                center_id: studentCenterId,
-                                // Clear batch assignments during center transfer
-                                student_batch_ids: [],
-                              },
-                            });
-                            queryClient.invalidateQueries({ queryKey: ['students'] });
-                            queryClient.invalidateQueries({ queryKey: ['leads'] });
-                            setShowCenterTransferWarning(false);
-                            toast.success('Center transferred successfully! Please re-assign batches in the new center.');
-                          } catch (error: any) {
-                            // Error handled in mutation
-                          }
-                        }}
-                        disabled={updateStudentMutation.isPending}
-                        className="w-full py-3 bg-yellow-600 text-white font-bold rounded-xl hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
-                      >
-                        {updateStudentMutation.isPending ? (
-                          <>
-                            <Loader2 className="h-5 w-5 animate-spin" />
-                            Transferring...
-                          </>
-                        ) : (
-                          <>
-                            ⚠️ Confirm Center Transfer
-                          </>
-                        )}
-                      </button>
+                    {/* Update Center Button: Team Lead does directly; Team Member requests approval */}
+                    {showCenterTransferWarning && studentCenterId && studentCenterId !== (studentRecord?.center_id || lead?.center_id) && (
+                      user?.role === 'team_lead' ? (
+                        <button
+                          onClick={async () => {
+                            if (!studentCenterId || !studentRecord) return;
+                            try {
+                              await updateStudentMutation.mutateAsync({
+                                studentId: studentRecord.id,
+                                data: {
+                                  center_id: studentCenterId,
+                                  student_batch_ids: [],
+                                },
+                              });
+                              queryClient.invalidateQueries({ queryKey: ['students'] });
+                              queryClient.invalidateQueries({ queryKey: ['leads'] });
+                              setShowCenterTransferWarning(false);
+                              toast.success('Center transferred successfully! Please re-assign batches in the new center.');
+                            } catch (error: any) {
+                              // Error handled in mutation
+                            }
+                          }}
+                          disabled={updateStudentMutation.isPending}
+                          className="w-full py-3 bg-yellow-600 text-white font-bold rounded-xl hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center justify-center gap-2"
+                        >
+                          {updateStudentMutation.isPending ? (
+                            <>
+                              <Loader2 className="h-5 w-5 animate-spin" />
+                              Transferring...
+                            </>
+                          ) : (
+                            <>⚠️ Confirm Center Transfer</>
+                          )}
+                        </button>
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            if (!studentCenterId || !studentRecord) return;
+                            try {
+                              await approvalsAPI.createApprovalRequest({
+                                request_type: 'CENTER_TRANSFER',
+                                student_id: studentRecord.id,
+                                reason: 'Center transfer requested.',
+                                current_value: String(studentRecord.center_id),
+                                requested_value: String(studentCenterId),
+                              });
+                              queryClient.invalidateQueries({ queryKey: ['approvals'] });
+                              setShowCenterTransferWarning(false);
+                              setStudentCenterId(studentRecord.center_id || lead?.center_id || null);
+                              toast.success('Transfer request submitted. A team lead will approve.');
+                            } catch (error: any) {
+                              toast.error(error?.response?.data?.detail || 'Failed to submit request');
+                            }
+                          }}
+                          className="w-full py-3 bg-amber-100 border-2 border-amber-400 text-amber-900 font-bold rounded-xl hover:bg-amber-200 transition-all flex items-center justify-center gap-2"
+                        >
+                          🚩 Request Center Transfer
+                        </button>
+                      )
                     )}
                   </div>
                 </div>
               )}
               
-              {/* Read-only Center Display (for non-team-leads) */}
-              {!canEdit && (
+              {/* Read-only Center Display (for observers or team members) */}
+              {(!canEdit || (canEdit && isTeamMember)) && (
                 <div className="p-5 bg-gray-50 border-2 border-gray-200 rounded-2xl">
                   <h3 className="text-sm font-black text-gray-700 uppercase tracking-widest mb-4">
                     🏢 Center Assignment
@@ -1812,7 +1817,7 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                                 {formatBatchScheduleDays(batch)} | {formatBatchTime(batch.start_time, batch.end_time)}
                               </p>
                             </div>
-                            {canEdit && (
+                            {canEditStudentProfile && (
                               <button
                                 onClick={async () => {
                                   const newBatchIds = assignedBatchIds.filter((id: number) => id !== batch.id);
@@ -2243,7 +2248,7 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                             return n + (s[(v - 20) % 10] || s[v] || s[0]);
                           };
                           
-                          const message = `Hi ${parentName}, amazing news! ${playerName} has completed his ${ordinalSuffix(milestone)} session at TOFA! ⚽ We are so proud of his commitment and progress. Check out his latest skill report here: ${leadUrl}`;
+                          const message = `Hi ${parentName}, amazing news! ${playerName} has completed his ${ordinalSuffix(milestone!)} session at TOFA! ⚽ We are so proud of his commitment and progress. Check out his latest skill report here: ${leadUrl}`;
                           
                           const cleanPhone = lead.phone.replace(/\D/g, '');
                           const encodedMessage = encodeURIComponent(message);
@@ -2260,6 +2265,11 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                     {/* Grace Period Nudges */}
                     {studentRecord?.in_grace_period && (
                       <>
+                        {studentRecord.grace_nudge_count != null && studentRecord.grace_nudge_count > 0 && (
+                          <p className="text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                            Reminder {studentRecord.grace_nudge_count} of 5 sent
+                          </p>
+                        )}
                         {(!studentRecord.grace_nudge_count || studentRecord.grace_nudge_count === 0) && (
                           <button
                             onClick={async () => {
@@ -2339,8 +2349,8 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                 </div>
               )}
 
-              {/* Update Subscription Section */}
-              {canEdit && (
+              {/* Update Subscription Section — Team Lead only */}
+              {canEditStudentProfile && (
                 <div id="renewal-section" className="space-y-4 p-5 bg-green-50 border-2 border-green-200 rounded-2xl">
                   <h4 className="text-sm font-black text-green-800 uppercase tracking-widest mb-4">
                     🔄 Update Subscription
@@ -2416,6 +2426,95 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                   </button>
                 </div>
               )}
+
+              {/* Deactivate Student Section - Team Lead: immediate; Team Member: request */}
+              {studentRecord && studentRecord.is_active && (user?.role === 'team_lead' || user?.role === 'team_member') && (
+                <div className="p-5 bg-red-50 border-2 border-red-200 rounded-2xl space-y-4">
+                  <h4 className="text-sm font-black text-red-800 uppercase tracking-widest mb-4">
+                    Deactivate Student
+                  </h4>
+                  {user?.role === 'team_lead' ? (
+                    <button
+                      onClick={async () => {
+                        if (!confirm('Deactivate this student? They will no longer appear in active rosters.')) return;
+                        try {
+                          await updateStudentMutation.mutateAsync({
+                            studentId: studentRecord.id,
+                            data: { is_active: false },
+                          });
+                          queryClient.invalidateQueries({ queryKey: ['students'] });
+                          queryClient.invalidateQueries({ queryKey: ['leads'] });
+                          toast.success('Student deactivated.');
+                          onClose();
+                        } catch (e: any) {
+                          toast.error(e?.response?.data?.detail || 'Failed to deactivate');
+                        }
+                      }}
+                      disabled={updateStudentMutation.isPending}
+                      className="w-full py-3 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 disabled:opacity-50"
+                    >
+                      {updateStudentMutation.isPending ? 'Deactivating...' : 'Deactivate'}
+                    </button>
+                  ) : (
+                    <>
+                      {!showDeactivateRequest ? (
+                        <button
+                          onClick={() => setShowDeactivateRequest(true)}
+                          className="w-full py-3 bg-red-100 border-2 border-red-300 text-red-800 font-bold rounded-xl hover:bg-red-200"
+                        >
+                          🚩 Request Deactivation
+                        </button>
+                      ) : (
+                        <div className="space-y-3">
+                          <label className="text-xs font-semibold text-gray-700">Reason for deactivation *</label>
+                          <textarea
+                            value={deactivateReason}
+                            onChange={(e) => setDeactivateReason(e.target.value)}
+                            placeholder="Explain why this student should be deactivated..."
+                            rows={3}
+                            className="w-full p-3 border border-gray-200 rounded-xl text-sm"
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              onClick={async () => {
+                                if (!deactivateReason.trim()) {
+                                  toast.error('Please provide a reason');
+                                  return;
+                                }
+                                try {
+                                  await approvalsAPI.createApprovalRequest({
+                                    request_type: 'DEACTIVATE',
+                                    student_id: studentRecord.id,
+                                    reason: deactivateReason.trim(),
+                                    current_value: 'Active',
+                                    requested_value: 'Deactivated',
+                                  });
+                                  queryClient.invalidateQueries({ queryKey: ['approvals'] });
+                                  toast.success('Deactivation request submitted. Team lead will review.');
+                                  setShowDeactivateRequest(false);
+                                  setDeactivateReason('');
+                                } catch (e: any) {
+                                  toast.error(e?.response?.data?.detail || 'Failed to submit request');
+                                }
+                              }}
+                              disabled={!deactivateReason.trim()}
+                              className="flex-1 py-2 bg-red-600 text-white font-semibold rounded-xl hover:bg-red-700 disabled:opacity-50"
+                            >
+                              Submit Request
+                            </button>
+                            <button
+                              onClick={() => { setShowDeactivateRequest(false); setDeactivateReason(''); }}
+                              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-xl font-medium"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -2437,7 +2536,11 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                   
                   <div className={`grid gap-3 ${studentRecord ? 'grid-cols-3' : 'grid-cols-2'}`}>
                     <button
-                      onClick={() => setOffRampStatus('Nurture')}
+                      onClick={() => {
+                        setOffRampStatus('Nurture');
+                        setLossReason('');
+                        setLossReasonNotes('');
+                      }}
                       className={`p-3 rounded-lg border-2 font-medium transition-colors ${
                         offRampStatus === 'Nurture'
                           ? 'bg-yellow-100 border-yellow-400 text-yellow-900'
@@ -2447,7 +2550,11 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                       💛 Move to Nurture
                     </button>
                     <button
-                      onClick={() => setOffRampStatus('Dead/Not Interested')}
+                      onClick={() => {
+                        setOffRampStatus('Dead/Not Interested');
+                        setLossReason('');
+                        setLossReasonNotes('');
+                      }}
                       className={`p-3 rounded-lg border-2 font-medium transition-colors ${
                         offRampStatus === 'Dead/Not Interested'
                           ? 'bg-red-100 border-red-400 text-red-900'
@@ -2473,13 +2580,50 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
 
                   {offRampStatus && (
                     <div className="space-y-3">
+                      {/* Nurture / Dead: mandatory Reason dropdown (Intelligent Off-Ramp) */}
+                      {(offRampStatus === 'Nurture' || offRampStatus === 'Dead/Not Interested') && (
+                        <>
+                          <div className="space-y-2">
+                            <label className="text-xs font-semibold text-gray-700">
+                              Reason <span className="text-red-500">*</span>
+                            </label>
+                            <select
+                              value={lossReason}
+                              onChange={(e) => setLossReason(e.target.value)}
+                              className="w-full p-2 bg-white border border-gray-200 rounded-lg"
+                            >
+                              <option value="">Select reason...</option>
+                              {LOSS_REASONS.map((r) => (
+                                <option key={r} value={r}>{r}</option>
+                              ))}
+                            </select>
+                          </div>
+                          {lossReason === 'Other' && (
+                            <div className="space-y-2">
+                              <label className="text-xs font-semibold text-gray-700">
+                                Details <span className="text-red-500">*</span>
+                              </label>
+                              <input
+                                type="text"
+                                value={lossReasonNotes}
+                                onChange={(e) => setLossReasonNotes(e.target.value)}
+                                placeholder="Please specify..."
+                                className="w-full p-2 bg-white border border-gray-200 rounded-lg"
+                              />
+                            </div>
+                          )}
+                        </>
+                      )}
                       {offRampStatus === 'Nurture' && (
                         <div className="space-y-2">
-                          <label className="text-xs font-semibold text-gray-700">Next Follow-up Date (Optional)</label>
+                          <label className="text-xs font-semibold text-gray-700">
+                            Next Follow-up Date <span className="text-red-500">*</span>
+                          </label>
                           <input
                             type="date"
                             value={nextDate}
                             onChange={(e) => setNextDate(e.target.value)}
+                            min={new Date().toISOString().split('T')[0]}
                             className="w-full p-2 bg-white border border-gray-200 rounded-lg"
                           />
                         </div>
@@ -2519,13 +2663,13 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                       )}
                       <div className="space-y-2">
                         <label className="text-xs font-semibold text-gray-700">
-                          {offRampStatus === 'Dead/Not Interested' ? 'Reason for Loss *' : offRampStatus === 'On Break' ? 'Additional Notes (Optional)' : 'Note *'}
+                          {offRampStatus === 'On Break' ? 'Additional Notes (Optional)' : (offRampStatus === 'Nurture' || offRampStatus === 'Dead/Not Interested') ? 'Additional note (Optional)' : 'Note *'}
                         </label>
                         <textarea
                           value={offRampNote}
                           onChange={(e) => setOffRampNote(e.target.value)}
-                          placeholder={offRampStatus === 'Dead/Not Interested' ? 'Explain why the lead is not interested...' : offRampStatus === 'On Break' ? 'Add any additional notes about the break...' : 'Add a note about nurturing this lead...'}
-                          rows={3}
+                          placeholder={offRampStatus === 'On Break' ? 'Add any additional notes about the break...' : (offRampStatus === 'Nurture' || offRampStatus === 'Dead/Not Interested') ? 'Any extra context...' : 'Add a note...'}
+                          rows={2}
                           className="w-full p-2 text-sm bg-white border border-gray-200 rounded-lg outline-none focus:ring-2 focus:ring-red-500"
                         />
                       </div>
@@ -2534,9 +2678,11 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                           onClick={handleOffRamp}
                           disabled={
                             updateLeadMutation.isPending ||
-                            (offRampStatus === 'On Break' 
+                            (offRampStatus === 'On Break'
                               ? (!breakReason.trim() || !breakReturnDate)
-                              : !offRampNote.trim())
+                              : (offRampStatus === 'Nurture' || offRampStatus === 'Dead/Not Interested')
+                                ? !lossReason.trim() || (lossReason === 'Other' && !lossReasonNotes.trim()) || (offRampStatus === 'Nurture' && !nextDate)
+                                : !offRampNote.trim())
                           }
                           className="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
@@ -2549,6 +2695,8 @@ export function LeadUpdateModal({ lead, isOpen, onClose, onJoined }: LeadUpdateM
                             setOffRampNote('');
                             setBreakReason('');
                             setBreakReturnDate('');
+                            setLossReason('');
+                            setLossReasonNotes('');
                           }}
                           className="px-4 py-2 bg-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-300"
                         >

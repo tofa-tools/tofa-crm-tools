@@ -11,7 +11,7 @@ from backend.models import AuditLog, Lead, User
 def log_lead_activity(
     db: Session,
     lead_id: int,
-    user_id: int,
+    user_id: Optional[int],
     action_type: str,
     description: str,
     old_value: Optional[str] = None,
@@ -23,7 +23,7 @@ def log_lead_activity(
     Args:
         db: Database session
         lead_id: ID of the lead being changed
-        user_id: ID of the user making the change
+        user_id: ID of the user making the change (None for system/public actions)
         action_type: Type of action ('status_change', 'comment_added', etc.)
         description: Human-readable description
         old_value: Previous value (optional)

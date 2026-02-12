@@ -157,6 +157,11 @@ def convert_lead_to_student(
         subscription_start_date=student_data['subscription_start_date'],
         subscription_end_date=student_data.get('subscription_end_date'),
         payment_proof_url=student_data.get('payment_proof_url'),
+        utr_number=student_data.get('utr_number'),
+        is_payment_verified=student_data.get('is_payment_verified', False),
+        kit_size=student_data.get('kit_size'),
+        medical_info=student_data.get('medical_info'),
+        secondary_contact=student_data.get('secondary_contact'),
         is_active=True
     )
     db.add(new_student)
@@ -242,14 +247,17 @@ def get_student_by_lead_id(db: Session, lead_id: int) -> Optional[Student]:
 def get_all_students(
     db: Session,
     center_id: Optional[int] = None,
+    center_ids: Optional[List[int]] = None,
     is_active: Optional[bool] = None
 ) -> List[Student]:
-    """Get all students, optionally filtered by center and active status."""
+    """Get all students, optionally filtered by center(s) and active status."""
     from sqlalchemy.orm import selectinload
     
     query = select(Student)
     
-    if center_id is not None:
+    if center_ids:
+        query = query.where(Student.center_id.in_(center_ids))
+    elif center_id is not None:
         query = query.where(Student.center_id == center_id)
     
     if is_active is not None:

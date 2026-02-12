@@ -9,6 +9,8 @@ export interface Center {
   meta_tag_name: string;
   city: string;
   location: string;
+  map_link?: string | null;
+  group_email?: string | null;
 }
 
 export interface CenterCreate {
@@ -16,10 +18,12 @@ export interface CenterCreate {
   meta_tag_name: string;
   city: string;
   location?: string;
+  map_link?: string | null;
+  group_email?: string | null;
 }
 
-// Age categories (master list and calculator)
-export { AGE_CATEGORIES, calculateAgeCategory, type AgeCategory } from '../logic/age-categories';
+// Age calculation from DOB
+export { calculateAge } from '../logic/age-groups';
 
 // Re-export Lead schemas and types
 export type { Lead, LeadStatus, LeadUpdate, LeadCreate } from '../schemas/lead';
@@ -75,4 +79,21 @@ export interface UploadResponse {
 export type { ImportPreviewRow, ImportPreviewResponse } from '../schemas/import';
 export { ImportPreviewResponseSchema, ImportPreviewRowSchema } from '../schemas/import';
 
+// Notification types (aligned with backend Notification model)
+export type NotificationCategory =
+  | 'SALES_ALERT'
+  | 'OPS_ALERT'
+  | 'FINANCE_ALERT'
+  | 'GOVERNANCE_ALERT';
+
+export interface Notification {
+  id: number;
+  user_id: number;
+  type: NotificationCategory;
+  title: string;
+  message: string;
+  link: string | null;
+  is_read: boolean;
+  created_at: string;
+}
 

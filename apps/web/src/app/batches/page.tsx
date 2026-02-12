@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useState, useMemo, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
@@ -12,14 +12,14 @@ import { useCenters } from '@/hooks/useCenters';
 import { X, Plus, UserPlus, Edit, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import type { BatchCreate } from '@tofa/core';
-import { AGE_CATEGORIES } from '@tofa/core';
 import { CreateBatchModal } from '@/components/batches/CreateBatchModal';
 import { formatDate } from '@/lib/utils';
 
-export default function BatchesPage() {
+function BatchesPageContent() {
   // ALL HOOKS MUST BE CALLED BEFORE ANY CONDITIONAL RETURNS
   const { user } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
   
   // State hooks - ALL must be before any conditional returns
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -28,12 +28,12 @@ export default function BatchesPage() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [selectedBatchId, setSelectedBatchId] = useState<number | null>(null);
   const [updatingBatchId, setUpdatingBatchId] = useState<number | null>(null);
-  const [selectedAgeCategories, setSelectedAgeCategories] = useState<string[]>([]);
   const [editModalInitialized, setEditModalInitialized] = useState(false);
   const [newBatch, setNewBatch] = useState<BatchCreate>({
     name: '',
     center_id: 0,
-    age_category: '',
+    min_age: 0,
+    max_age: 99,
     max_capacity: 20,
     is_mon: false,
     is_tue: false,
@@ -66,8 +66,11 @@ export default function BatchesPage() {
   const centers = centersData || [];
   const users = usersData || [];
   const coaches = users.filter(u => u.role === 'coach');
-  const ageCategoryOptions = [...AGE_CATEGORIES];
   
+  useEffect(() => {
+    if (searchParams.get('create') === '1') setShowCreateModal(true);
+  }, [searchParams]);
+
   // Route protection: Redirect non-team-leads
   useEffect(() => {
     if (user && user.role !== 'team_lead') {
@@ -81,11 +84,11 @@ export default function BatchesPage() {
     if (showEditModal && selectedBatchId) {
       const batch = batches.find(b => b.id === selectedBatchId);
       if (batch && !editModalInitialized) {
-        setSelectedAgeCategories(batch.age_category ? batch.age_category.split(',').map((s: string) => s.trim()) : []);
         setNewBatch({
           name: batch.name,
           center_id: batch.center_id,
-          age_category: batch.age_category,
+          min_age: batch.min_age ?? 0,
+          max_age: batch.max_age ?? 99,
           max_capacity: batch.max_capacity,
           is_mon: batch.is_mon,
           is_tue: batch.is_tue,
@@ -126,7 +129,8 @@ export default function BatchesPage() {
   const isFormValid = hasScheduleDays;
 
   const handleCreateBatch = async () => {
-    if (!newBatch.name || !newBatch.center_id || selectedAgeCategories.length === 0 || !newBatch.start_date) {
+    const ageValid = (newBatch.min_age ?? 0) <= (newBatch.max_age ?? 99);
+    if (!newBatch.name || !newBatch.center_id || !ageValid || !newBatch.start_date) {
       toast.error('Please fill in all required fields');
       return;
     }
@@ -144,14 +148,13 @@ export default function BatchesPage() {
     try {
       await createBatchMutation.mutateAsync({
         ...newBatch,
-        age_category: selectedAgeCategories.join(','),
       });
       setShowCreateModal(false);
-      setSelectedAgeCategories([]);
       setNewBatch({
         name: '',
         center_id: 0,
-        age_category: '',
+        min_age: 0,
+        max_age: 99,
         max_capacity: 20,
         is_mon: false,
         is_tue: false,
@@ -196,7 +199,8 @@ export default function BatchesPage() {
   };
 
   const handleUpdateBatch = async () => {
-    if (!selectedBatchId || !newBatch.name || !newBatch.center_id || selectedAgeCategories.length === 0) {
+    const ageValid = (newBatch.min_age ?? 0) <= (newBatch.max_age ?? 99);
+    if (!selectedBatchId || !newBatch.name || !newBatch.center_id || !ageValid) {
       toast.error('Please fill in all required fields');
       return;
     }
@@ -209,18 +213,15 @@ export default function BatchesPage() {
     try {
       await updateBatchMutation.mutateAsync({
         batchId: selectedBatchId,
-        data: {
-          ...newBatch,
-          age_category: selectedAgeCategories.join(','),
-        },
+        data: { ...newBatch },
       });
       setShowEditModal(false);
       setSelectedBatchId(null);
-      setSelectedAgeCategories([]);
       setNewBatch({
         name: '',
         center_id: 0,
-        age_category: '',
+        min_age: 0,
+        max_age: 99,
         max_capacity: 20,
         is_mon: false,
         is_tue: false,
@@ -331,7 +332,7 @@ export default function BatchesPage() {
                       Center
                     </th>
                     <th className="px-4 py-2 text-left text-xs font-bold text-tofa-gold uppercase tracking-wider">
-                      Age Category
+                      Age Group
                     </th>
                     <th className="px-4 py-2 text-left text-xs font-bold text-tofa-gold uppercase tracking-wider">
                       Schedule
@@ -368,7 +369,7 @@ export default function BatchesPage() {
                         {getCenterName(batch.center_id)}
                       </td>
                       <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-500">
-                        {batch.age_category ? batch.age_category.split(',').map((cat: string) => cat.trim()).join(', ') : '—'}
+                        {batch.min_age != null && batch.max_age != null ? `${batch.min_age}–${batch.max_age}` : '—'}
                       </td>
                       <td className="px-4 py-2 text-sm text-gray-500 whitespace-normal">
                         {getScheduleDisplay(batch)}
@@ -459,7 +460,8 @@ export default function BatchesPage() {
             setNewBatch({
               name: '',
               center_id: 0,
-              age_category: '',
+              min_age: 0,
+              max_age: 99,
               max_capacity: 20,
               is_mon: false,
               is_tue: false,
@@ -597,7 +599,7 @@ export default function BatchesPage() {
                     value={newBatch.name}
                     onChange={(e) => setNewBatch({ ...newBatch, name: e.target.value })}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-accent focus:border-brand-accent outline-none"
-                    placeholder="e.g., U9 Morning Batch"
+                    placeholder=""
                   />
                 </div>
 
@@ -621,36 +623,33 @@ export default function BatchesPage() {
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Age Categories *
-                  </label>
-                  <div className="flex flex-wrap gap-2 border border-gray-300 rounded-lg p-3 min-h-[3rem]">
-                    {ageCategoryOptions.map((category) => (
-                      <label
-                        key={category}
-                        className="flex items-center gap-2 cursor-pointer bg-gray-50 px-3 py-2 rounded-lg hover:bg-gray-100"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selectedAgeCategories.includes(category)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedAgeCategories([...selectedAgeCategories, category]);
-                            } else {
-                              setSelectedAgeCategories(selectedAgeCategories.filter(cat => cat !== category));
-                            }
-                          }}
-                          className="rounded border-gray-300 text-brand-accent focus:ring-brand-accent"
-                        />
-                        <span className="text-sm">{category}</span>
-                      </label>
-                    ))}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Minimum Age *</label>
+                    <input
+                      type="number"
+                      value={newBatch.min_age ?? 0}
+                      onChange={(e) => setNewBatch({ ...newBatch, min_age: parseInt(e.target.value, 10) || 0 })}
+                      min={0}
+                      max={99}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-accent outline-none"
+                    />
                   </div>
-                  {selectedAgeCategories.length === 0 && (
-                    <p className="text-xs text-red-500 mt-1">Please select at least one age category</p>
-                  )}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Maximum Age *</label>
+                    <input
+                      type="number"
+                      value={newBatch.max_age ?? 99}
+                      onChange={(e) => setNewBatch({ ...newBatch, max_age: parseInt(e.target.value, 10) || 99 })}
+                      min={0}
+                      max={99}
+                      className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-accent outline-none"
+                    />
+                  </div>
                 </div>
+                {(newBatch.min_age ?? 0) > (newBatch.max_age ?? 99) && (
+                  <p className="text-xs text-red-500">Max age must be &ge; min age</p>
+                )}
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -878,3 +877,10 @@ export default function BatchesPage() {
   );
 }
 
+export default function BatchesPage() {
+  return (
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600" /></div>}>
+      <BatchesPageContent />
+    </Suspense>
+  );
+}

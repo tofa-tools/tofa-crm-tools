@@ -7,19 +7,17 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import { BulkActionsToolbar } from '@/components/leads/BulkActionsToolbar';
 import { PlannerPane } from '@/components/leads/PlannerPane';
-import { ReferralModal } from '@/components/leads/ReferralModal';
-import { AgeMigrationAlert } from '@/components/leads/AgeMigrationAlert';
+import { WelcomeModal } from '@/components/leads/WelcomeModal';
 import { SkillReportModal } from '@/components/leads/SkillReportModal';
 import { LeadUpdateModal } from '@/components/leads/LeadUpdateModal';
 import { useLeads, usePrefetchNextPage } from '@/hooks/useLeads';
-import { useStudents } from '@/hooks/useStudents';
 import { useBatches } from '@/hooks/useBatches';
 import { useCenters } from '@/hooks/useCenters';
 import { useAuth } from '@/context/AuthContext';
 import { formatDate } from '@/lib/utils';
 import { PAGINATION_OPTIONS } from '@/lib/config/crm';
 import type { Lead, LeadStatus } from '@tofa/core';
-import { StagingLeadsModal } from '@/components/leads/StagingLeadsModal';
+import { calculateAge } from '@tofa/core';
 import { CreateLeadModal } from '@/components/leads/CreateLeadModal';
 import { stagingAPI } from '@/lib/api';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -40,6 +38,8 @@ function LeadsContent() {
   const sortDirection = searchParams.get('sortDirection') || 'asc'; // 'asc' or 'desc'
   const nextFollowupDateFilter = searchParams.get('next_follow_up_date') || null;
   const lossReasonFilter = searchParams.get('loss_reason') || null;
+  const specialFilter = searchParams.get('filter') || null;  // "overdue" | "at-risk" | "new"
+  const shouldOpenCreate = searchParams.get('create') === '1';
   const offset = (currentPage - 1) * pageSize;
 
   // --- UI State ---
@@ -50,12 +50,12 @@ function LeadsContent() {
   const [joinedLeadId, setJoinedLeadId] = useState<number | null>(null);
   const [joinedPlayerName, setJoinedPlayerName] = useState<string>('');
   const [showSkillReportModal, setShowSkillReportModal] = useState(false);
-  const [showStagingModal, setShowStagingModal] = useState(false);
   const [showCreateLeadModal, setShowCreateLeadModal] = useState(false);
   const [searchInputValue, setSearchInputValue] = useState(searchTerm);
-  
-  // Determine if we're viewing Active Students or Leads Pipeline
-  const isActiveStudentsView = statusFilter.length === 1 && statusFilter[0] === 'Joined';
+
+  useEffect(() => {
+    if (shouldOpenCreate) setShowCreateLeadModal(true);
+  }, [shouldOpenCreate]);
 
   // --- Data Fetching ---
   // Backend only supports 'created_time' or 'freshness'
@@ -67,36 +67,20 @@ function LeadsContent() {
     limit: pageSize,
     offset,
     sort_by: backendSortBy,
-    ...(statusFilter.length === 1 && { status: statusFilter[0] }),
+    ...(statusFilter.length === 1 && !specialFilter && { status: statusFilter[0] }),
     ...(searchTerm && { search: searchTerm }),
     ...(nextFollowupDateFilter && { next_follow_up_date: nextFollowupDateFilter }),
     ...(lossReasonFilter && { loss_reason: lossReasonFilter }),
+    ...(specialFilter && { filter: specialFilter }),
   };
 
-  // Fetch leads (excluding 'Joined' status when in Leads Pipeline view)
-  const leadsQueryParams = isActiveStudentsView ? {} : {
+  // Fetch leads only (Leads Management = non-Joined leads; Students are on /students)
+  const { data: leadsResponse, isLoading: leadsLoading } = useLeads({
     ...queryParams,
-    // Exclude 'Joined' status when viewing Leads Pipeline
-    status: queryParams.status ? queryParams.status : undefined,
-  };
+    status: specialFilter ? undefined : (statusFilter.length > 0 && !statusFilter.includes('Joined' as LeadStatus) ? statusFilter.join(',') : undefined),
+  });
   
-  // Filter out 'Joined' status from leads query for Pipeline view
-  const { data: leadsResponse, isLoading: leadsLoading } = useLeads(
-    isActiveStudentsView ? undefined : {
-      ...queryParams,
-      // Ensure we don't include 'Joined' in the status filter
-      status: statusFilter.length > 0 && !statusFilter.includes('Joined' as LeadStatus) 
-        ? statusFilter.join(',') 
-        : undefined,
-    }
-  );
-  
-  // Fetch students when in Active Students view
-  const { data: studentsData, isLoading: studentsLoading } = useStudents(
-    isActiveStudentsView ? { is_active: true } : undefined
-  );
-  
-  const isLoading = isActiveStudentsView ? studentsLoading : leadsLoading;
+  const isLoading = leadsLoading;
   
   const { data: stagingLeadsData } = useQuery({
     queryKey: ['stagingLeads'],
@@ -106,29 +90,9 @@ function LeadsContent() {
 
   const prefetchNextPage = usePrefetchNextPage(queryParams, pageSize);
 
-  // Use students data when in Active Students view, otherwise use leads
-  const leadsData = isActiveStudentsView 
-    ? (studentsData || []).map((student: any) => ({
-        id: student.lead_id, // Use lead_id for compatibility
-        player_name: student.lead_player_name || 'Unknown',
-        status: 'Joined' as LeadStatus,
-        subscription_plan: student.subscription_plan,
-        subscription_end_date: student.subscription_end_date,
-        student_batch_ids: student.student_batch_ids || [],
-        date_of_birth: student.lead_date_of_birth ?? null,
-        // Add other required Lead fields with defaults
-        player_age_category: student.lead_player_age_category ?? '',
-        phone: '',
-        email: null,
-        address: null,
-        created_time: student.created_at,
-        center_id: student.center_id,
-      }))
-    : (leadsResponse?.leads || []).filter((lead: Lead) => lead.status !== 'Joined'); // Filter out Joined status
-  
-  const totalLeads = isActiveStudentsView 
-    ? (studentsData || []).length
-    : (leadsResponse?.total || 0);
+  // Leads Management: only non-Joined leads (Students are on /students)
+  const leadsData = (leadsResponse?.leads || []).filter((lead: Lead) => lead.status !== 'Joined');
+  const totalLeads = leadsResponse?.total ?? leadsData.length;
   const totalPages = Math.ceil(totalLeads / pageSize);
   const stagingLeads = stagingLeadsData || [];
   
@@ -242,12 +206,12 @@ function LeadsContent() {
     <MainLayout>
       <div className="min-h-screen">
         <PageHeader
-          title="Lead Management"
-          subtitle={`Managing ${totalLeads} records`}
+          title="LEADS MANAGEMENT"
+          subtitle={`${totalLeads} prospect${totalLeads !== 1 ? 's' : ''}`}
           actions={
             <div className="flex items-center gap-3">
-              {/* Add Lead Button (Team Leads only) */}
-              {user?.role === 'team_lead' && (
+              {/* Add Lead Button (Team Leads and Team Members) */}
+              {(user?.role === 'team_lead' || user?.role === 'team_member') && (
                 <button
                   onClick={() => setShowCreateLeadModal(true)}
                   className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-yellow-500 via-amber-600 to-yellow-700 text-brand-primary rounded-xl shadow-lg hover:shadow-xl font-semibold transition-all"
@@ -256,35 +220,6 @@ function LeadsContent() {
                   Add Lead
                 </button>
               )}
-              {/* Pipeline/Students Toggle - Segmented Control */}
-              <div className="flex items-center gap-0 bg-brand-primary/20 rounded-full p-1 shadow-inner">
-                <button
-                  onClick={() => {
-                    // Show leads pipeline (clear status filter to show all non-Joined leads)
-                    updateURLParams({ status: null, page: 1 });
-                  }}
-                  className={`px-5 py-2 rounded-full font-semibold text-sm transition-all duration-200 ${
-                    !isActiveStudentsView
-                      ? 'bg-brand-accent text-brand-primary shadow-lg shadow-brand-accent/20'
-                      : 'text-white hover:text-brand-accent/80'
-                  }`}
-                >
-                  Leads Pipeline
-                </button>
-                <button
-                  onClick={() => {
-                    // Show Active Students (from Student table)
-                    updateURLParams({ status: 'Joined', page: 1 });
-                  }}
-                  className={`px-5 py-2 rounded-full font-semibold text-sm transition-all duration-200 ${
-                    isActiveStudentsView
-                      ? 'bg-brand-accent text-brand-primary shadow-lg shadow-brand-accent/20'
-                      : 'text-white hover:text-brand-accent/80'
-                  }`}
-                >
-                  Active Students
-                </button>
-              </div>
               <button 
                 onClick={() => setIsPlannerOpen(!isPlannerOpen)} 
                 className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl shadow-sm hover:bg-gray-50 font-medium"
@@ -308,7 +243,7 @@ function LeadsContent() {
                 <p className="text-white/80 text-sm">Review walk-ins from coaches.</p>
               </div>
             </div>
-            <button onClick={() => setShowStagingModal(true)} className="px-6 py-2 bg-white text-brand-primary font-bold rounded-lg shadow-sm hover:scale-105 transition-transform">Process</button>
+            <button onClick={() => router.push('/staging')} className="px-6 py-2 bg-white text-brand-primary font-bold rounded-lg shadow-sm hover:scale-105 transition-transform">Process</button>
           </div>
         )}
 
@@ -320,7 +255,7 @@ function LeadsContent() {
               type="text"
               value={searchInputValue}
               onChange={(e) => setSearchInputValue(e.target.value)}
-              placeholder="Search students..."
+              placeholder="Search leads..."
               className="w-full pl-10 pr-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
             />
           </div>
@@ -404,7 +339,7 @@ function LeadsContent() {
                       )}
                     </div>
                   </th>
-                  <th className="px-6 py-4 text-left">Age Category</th>
+                  <th className="px-6 py-4 text-left">Age</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
@@ -422,8 +357,8 @@ function LeadsContent() {
                         {lead.player_name}
                         {lead.date_of_birth == null && (
                           <span
-                            className="inline-flex text-red-500"
-                            title="⚠️ Missing DOB: Age migration alerts are disabled"
+                            className="inline-flex text-amber-500"
+                            title="Missing date of birth"
                           >
                             <AlertTriangle className="h-4 w-4" aria-hidden />
                           </span>
@@ -449,11 +384,8 @@ function LeadsContent() {
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(lead.created_time)}</td>
                     <td className="px-6 py-4 text-sm text-gray-500 font-medium">{formatDate(lead.next_followup_date)}</td>
-                    <td className="px-6 py-4">
-                       <div className="flex items-center gap-2 text-sm text-gray-600">
-                         {lead.player_age_category}
-                         <AgeMigrationAlert leadId={lead.id} currentCategory={lead.player_age_category} dateOfBirth={lead.date_of_birth} playerName={lead.player_name} onCategoryUpdated={() => queryClient.invalidateQueries({ queryKey: ['leads'] })} />
-                       </div>
+                    <td className="px-6 py-4 text-sm text-gray-600">
+                      {lead.date_of_birth ? (calculateAge(lead.date_of_birth) ?? '—') : '—'}
                     </td>
                   </tr>
                 )) : (
@@ -492,9 +424,8 @@ function LeadsContent() {
       />
 
       {/* Overlays */}
-      {joinedLeadId && <ReferralModal isOpen={showReferralModal} onClose={() => setShowReferralModal(false)} playerName={joinedPlayerName} leadId={joinedLeadId} />}
+      {joinedLeadId && <WelcomeModal isOpen={showReferralModal} onClose={() => setShowReferralModal(false)} playerName={joinedPlayerName} leadId={joinedLeadId} />}
       <SkillReportModal isOpen={showSkillReportModal} onClose={() => setShowSkillReportModal(false)} leadId={selectedLead?.id || 0} playerName={selectedLead?.player_name || ""} existingReport={null} onSuccess={() => queryClient.invalidateQueries({ queryKey: ['leads'] })} />
-      <StagingLeadsModal isOpen={showStagingModal} onClose={() => setShowStagingModal(false)} onProcess={() => queryClient.invalidateQueries({ queryKey: ['leads'] })} />
       <CreateLeadModal isOpen={showCreateLeadModal} onClose={() => setShowCreateLeadModal(false)} />
       </div>
     </MainLayout>

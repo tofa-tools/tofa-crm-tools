@@ -1,0 +1,28 @@
+# Exclude mobile app — web build never needs it
+apps/mobile
+
+# Build outputs and caches
+node_modules
+.next
+.expo
+.turbo
+dist
+build
+
+# Git and env files
+.git
+.gitignore
+.env*
+!.env.example
+
+# IDE and OS
+.idea
+.vscode
+*.swp
+.DS_Store
+Thumbs.db
+
+# Misc
+*.md
+*.log
+docs

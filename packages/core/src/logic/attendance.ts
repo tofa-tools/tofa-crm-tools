@@ -20,7 +20,7 @@ export type ParticipantType = 'trial' | 'student';
 export interface Participant {
   id: number;
   name: string;
-  ageCategory?: string;
+  ageGroup?: string;
   type: ParticipantType;
   studentId: number | null;
   leadId: number;

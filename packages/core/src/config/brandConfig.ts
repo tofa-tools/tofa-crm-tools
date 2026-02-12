@@ -42,7 +42,20 @@ export const brandConfig = {
   shortName: getShortName(),
   logo: getLogoPath(),
   supportPhone: getSupportPhone(),
-  
+  /** UPI ID for payment links (e.g. yourname@ybl). Used on public join/renewal page. Set NEXT_PUBLIC_UPI_PAYEE_ID to override. */
+  upiId: 'yourname@ybl',
+
+  /**
+   * Subscription Plans & Pricing (Enrollment page)
+   * Monthly: ₹2500, 3 Months: ₹5000, 6 Months: ₹11000, Yearly: ₹17500
+   */
+  enrollmentPlans: [
+    { value: 'Monthly', label: 'Monthly', months: 1, price: 2500 },
+    { value: '3 Months', label: '3 Months', months: 3, price: 5000 },
+    { value: '6 Months', label: '6 Months', months: 6, price: 11000 },
+    { value: 'Yearly', label: 'Yearly', months: 12, price: 17500 },
+  ] as const,
+
   /**
    * Brand Colors - Shared between Web and Mobile
    */
@@ -79,6 +92,13 @@ Please click the link below and select your preferred demo class and let us know
      * General enrollment inquiry message
      */
     enrollmentInquiry: `Hi! This is regarding {{playerName}}'s enrollment at {{academyName}}.`,
+
+    /**
+     * Enrollment link message (after trial – parent chooses plan, pays, uploads proof)
+     */
+    enrollmentLink: `Hi! Great news – {{playerName}}'s trial is done. Complete enrollment by choosing a plan and paying here (link valid for 7 days):
+
+{{enrollmentLink}}`,
 
     /**
      * Welcome back nudge for students returning from break

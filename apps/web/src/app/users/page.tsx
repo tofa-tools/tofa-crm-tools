@@ -25,6 +25,7 @@ export default function UsersPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState('');
   const [role, setRole] = useState('team_member');
   const [selectedCenters, setSelectedCenters] = useState<number[]>([]);
   const [error, setError] = useState('');
@@ -45,6 +46,7 @@ export default function UsersPage() {
     setEmail('');
     setPassword('');
     setFullName('');
+    setPhone('');
     setRole('team_member');
     setSelectedCenters([]);
     setError('');
@@ -55,9 +57,8 @@ export default function UsersPage() {
     setEmail(user.email);
     setPassword('');
     setFullName(user.full_name);
+    setPhone((user as { phone?: string | null }).phone ?? '');
     setRole(user.role || 'team_member');
-    // Note: We need to get user's centers from the backend response
-    // For now, we'll set empty and let the user re-select
     setSelectedCenters(user.center_ids || []);
     setShowForm(true);
     setError('');
@@ -99,7 +100,7 @@ export default function UsersPage() {
     e.preventDefault();
     setError('');
 
-    if (!fullName) {
+    if (!fullName || !phone.trim()) {
       setError('Please fill all required fields (*)');
       return;
     }
@@ -115,6 +116,7 @@ export default function UsersPage() {
         // Update existing user
         const updateData: any = {
           full_name: fullName,
+          phone: phone.trim() || null,
           role,
           center_ids: selectedCenters,
         };
@@ -141,6 +143,7 @@ export default function UsersPage() {
           email,
           password,
           full_name: fullName,
+          phone: phone.trim(),
           role,
           center_ids: selectedCenters,
         });
@@ -272,6 +275,19 @@ export default function UsersPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
+                    📞 Phone Number *
+                  </label>
+                  <input
+                    type="tel"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder=""
+                    required
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
                     🔒 Password {editingUser ? '(leave blank to keep current)' : '*'}
                   </label>
                   <input
@@ -373,6 +389,9 @@ export default function UsersPage() {
                     <th className="px-4 py-3 text-left text-xs font-bold text-tofa-gold uppercase tracking-wider w-64">
                       Email
                     </th>
+                    <th className="px-4 py-3 text-left text-xs font-bold text-tofa-gold uppercase tracking-wider w-36">
+                      Phone
+                    </th>
                     <th className="px-4 py-3 text-left text-xs font-bold text-tofa-gold uppercase tracking-wider w-48">
                       Centers
                     </th>
@@ -411,6 +430,16 @@ export default function UsersPage() {
                       {/* Email Column */}
                       <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-600">
                         {user.email}
+                      </td>
+                      {/* Phone Column */}
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-600">
+                        {(user as { phone?: string | null }).phone ? (
+                          <a href={`tel:${(user as { phone?: string }).phone}`} className="text-blue-600 hover:underline">
+                            {(user as { phone?: string }).phone}
+                          </a>
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
                       </td>
                       {/* Centers Column */}
                       <td className="px-4 py-2 text-sm text-gray-600">

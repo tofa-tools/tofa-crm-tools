@@ -9,7 +9,6 @@ from datetime import datetime, date
 class LeadCreate(BaseModel):
     """Schema for creating a new lead."""
     player_name: str
-    player_age_category: str
     phone: str
     email: Optional[str] = None
     address: Optional[str] = None
@@ -25,7 +24,6 @@ class LeadUpdate(BaseModel):
     status: Optional[str] = None
     next_followup_date: Optional[datetime] = None
     comment: Optional[str] = None  # For adding comments
-    age_category: Optional[str] = None
     date_of_birth: Optional[date] = None
     trial_batch_id: Optional[int] = None
     permanent_batch_id: Optional[int] = None
@@ -42,7 +40,6 @@ class LeadRead(BaseModel):
     created_time: datetime
     last_updated: Optional[datetime] = None
     player_name: str
-    player_age_category: str
     date_of_birth: Optional[date] = None
     phone: str
     email: Optional[str] = None
@@ -104,7 +101,6 @@ class LeadReadCoach(BaseModel):
     created_time: datetime
     last_updated: Optional[datetime] = None
     player_name: str
-    player_age_category: str
     date_of_birth: Optional[date] = None
     address: Optional[str] = None  # Address may be less sensitive, keep for now
     status: str
@@ -125,12 +121,16 @@ class LeadReadCoach(BaseModel):
 
 
 class LeadPreferencesRead(BaseModel):
-    """Schema for public lead preferences read (no auth required)."""
+    """Schema for public lead preferences read (no auth required). Never exposes lead phone, email, or address."""
     player_name: str
     center_name: str
-    player_age_category: Optional[str] = None  # Lead's age category
-    batches: List[Dict[str, Any]]  # List of batches filtered by age (for permanent batch selection)
-    demo_batches: Optional[List[Dict[str, Any]]] = None  # List of demo batches (with nearest age fallback)
+    preferences_submitted: bool = False  # Submit-once: when True, show Thank You instead of form
+    link_expired: bool = False  # Time-based: True if lead >7 days old and preferences not submitted
+    location_link: Optional[str] = None  # Google Maps URL for center
+    center_head: Optional[Dict[str, Any]] = None  # { name, phone } of primary team member
+    player_age: Optional[int] = None  # Lead's age (derived from DOB)
+    batches: List[Dict[str, Any]]  # All active batches at center (no age filter; age is label-only)
+    demo_batches: Optional[List[Dict[str, Any]]] = None  # Same; for trial/demo selection
     preferred_batch_id: Optional[int] = None
     preferred_demo_batch_id: Optional[int] = None  # Demo/trial batch preference
     preferred_call_time: Optional[str] = None

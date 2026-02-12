@@ -79,6 +79,11 @@ SECRET_KEY=your-secret-key-here
 # Optional: Sentry Error Tracking
 SENTRY_DSN=your-sentry-dsn-here
 ENVIRONMENT=development
+
+# Optional: Welcome email (sent when Team Lead clicks "Verify & Enroll")
+# Get an API key at https://resend.com/api-keys
+RESEND_API_KEY=re_xxxxxxxxxxxx
+EMAIL_FROM=Your Academy <onboarding@resend.dev>
 ```
 
 **Using Supabase?** Use your Supabase connection string:
@@ -90,12 +95,12 @@ DATABASE_URL=postgresql://postgres:[YOUR-PASSWORD]@[YOUR-PROJECT-REF].supabase.c
 
 If using Supabase, run the SQL schema:
 1. Go to Supabase Dashboard → SQL Editor
-2. Copy contents of `supabase_schema.sql`
+2. Copy contents of `main_schema.sql`
 3. Paste and run in SQL Editor
 
 If using local PostgreSQL:
 ```bash
-psql -U postgres -d tofa_db -f supabase_schema.sql
+psql -U postgres -d tofa_db -f main_schema.sql
 ```
 
 ### Step 4: Activate Virtual Environment and Start Backend Server
@@ -405,7 +410,7 @@ CREATE DATABASE tofa_db;
 3. Update `DATABASE_URL` in your `.env` file
 4. Run the schema file:
 ```bash
-psql -U postgres -d tofa_db -f supabase_schema.sql
+psql -U postgres -d tofa_db -f main_schema.sql
 ```
 
 ### Option 2: Using Supabase (Recommended for Quick Setup)
@@ -415,7 +420,7 @@ psql -U postgres -d tofa_db -f supabase_schema.sql
 3. Update `DATABASE_URL` in your `.env` file
 4. Run the schema:
    - Go to Supabase Dashboard → SQL Editor
-   - Copy contents of `supabase_schema.sql`
+   - Copy contents of `main_schema.sql`
    - Paste and run
 
 ---

@@ -5,24 +5,14 @@
 import type { Batch } from '../types';
 
 /**
- * Filter batches by age category and center
- * Only returns active batches that match the age category
+ * Filter batches by center only (no age restriction).
+ * Use for all batch visibility: Trial/Demo dropdown, Assign Batch, public preferences, mobile roster/check-in.
+ * Only filters by center_id and is_active; no age calculations. Age is display-only (e.g. "Ages 5-9").
  */
-export function filterBatchesByAgeCategory(
-  batches: Batch[],
-  ageCategory: string,
-  centerId: number
-): Batch[] {
-  return batches.filter(batch => {
-    // Must match center and be active
-    if (batch.center_id !== centerId || !batch.is_active) {
-      return false;
-    }
-    
-    // Check if batch age categories include the lead's age category
-    const batchAgeCategories = batch.age_category.toLowerCase().split(',').map((cat: string) => cat.trim());
-    return batchAgeCategories.includes(ageCategory.toLowerCase());
-  });
+export function filterBatchesByCenter(batches: Batch[], centerId: number): Batch[] {
+  return batches.filter(
+    (batch) => batch.center_id === centerId && batch.is_active === true
+  );
 }
 
 /**

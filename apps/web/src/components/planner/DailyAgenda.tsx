@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { format } from 'date-fns';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import type { Lead, LeadStatus } from '@tofa/core';
-import { brandConfig, generateWhatsAppLink } from '@tofa/core';
+import { brandConfig, generateWhatsAppLink, calculateAge } from '@tofa/core';
 import { QuickUpdateModal } from './QuickUpdateModal';
 
 interface DailyAgendaProps {
@@ -237,7 +237,7 @@ function AgendaCard({ lead, onCall, onUpdate }: AgendaCardProps) {
             <StatusBadge status={lead.status as LeadStatus} />
           </div>
           <p className="text-xs text-gray-600">
-            {lead.player_age_category || 'Age N/A'}
+            {lead.date_of_birth ? (calculateAge(lead.date_of_birth) ?? '—') : '—'}
           </p>
         </div>
       </div>

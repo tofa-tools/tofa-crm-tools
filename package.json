@@ -2,12 +2,13 @@
   "name": "tofa-monorepo",
   "version": "1.0.0",
   "private": true,
-  "packageManager": "npm@10.8.2", 
+  "packageManager": "npm@10.8.2",
   "workspaces": [
     "apps/*",
     "packages/*"
   ],
   "scripts": {
+    "docker:web": "docker build -f Dockerfile.web -t tofa-web .",
     "dev": "turbo run dev",
     "build": "turbo run build",
     "lint": "turbo run lint",
@@ -23,5 +24,8 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@sentry/node": "^10.34.0"
   }
 }

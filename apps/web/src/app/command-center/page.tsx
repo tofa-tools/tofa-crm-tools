@@ -4,27 +4,22 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { MetricCards } from '@/components/planner/MetricCards';
+import { ActionGrid } from '@/components/planner/ActionGrid';
 import { CalendarHeatmap } from '@/components/planner/CalendarHeatmap';
-import { ActionQueue } from '@/components/planner/ActionQueue';
+import { StrategicIntelligence } from '@/components/planner/StrategicIntelligence';
+import { CommandCenterSidebar } from '@/components/planner/CommandCenterSidebar';
 import { ExecutiveDashboard } from '@/components/planner/ExecutiveDashboard';
-import { UnscheduledInbox } from '@/components/planner/UnscheduledInbox';
-import { ExecutiveSidebar } from '@/components/planner/ExecutiveSidebar';
-import Image from 'next/image';
+import { UnverifiedPaymentsView } from '@/components/planner/UnverifiedPaymentsView';
+import { useQuery } from '@tanstack/react-query';
 import { useCalendarMonth } from '@/hooks/useCalendar';
-import { useDailyQueue } from '@/hooks/useTasks';
-import { useUpdateLead } from '@/hooks/useLeads';
 import { useCommandCenterAnalytics } from '@/hooks/useAnalytics';
 import { ReactivationBroadcastModal } from '@/components/leads/ReactivationBroadcastModal';
-import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/context/AuthContext';
-import type { LeadStatus } from '@tofa/core';
-import { brandConfig } from '@tofa/core';
+import { studentsAPI } from '@/lib/api';
 
 export default function CommandCenterPage() {
   const { user } = useAuth();
   const router = useRouter();
-  const queryClient = useQueryClient();
   const isTeamLead = user?.role === 'team_lead';
 
   // Redirect coaches to their dashboard
@@ -37,11 +32,11 @@ export default function CommandCenterPage() {
   if (user?.role === 'coach') {
     return null;
   }
-  const [currentView, setCurrentView] = useState<'sales' | 'executive'>('sales');
+  const [currentView, setCurrentView] = useState<'sales' | 'executive' | 'unverified'>('sales');
   
   // Force sales view if user is not team_lead
   useEffect(() => {
-    if (user?.role !== 'team_lead' && currentView === 'executive') {
+    if (user?.role !== 'team_lead' && (currentView === 'executive' || currentView === 'unverified')) {
       setCurrentView('sales');
     }
   }, [user?.role, currentView]);
@@ -49,65 +44,29 @@ export default function CommandCenterPage() {
   const [selectedDate, setSelectedDate] = useState<string>(
     new Date().toISOString().split('T')[0]
   );
-  const [filterType, setFilterType] = useState<'overdue' | 'unscheduled' | 'skill_reports' | 'hot_trials' | 'reschedule' | 'post_trial_no_response' | 'renewals' | 'nurture_reengage' | 'milestones' | 'on_break' | 'returning_soon' | null>(null);
   const [selectedReactivationBatch, setSelectedReactivationBatch] = useState<any>(null);
   const [showBroadcastModal, setShowBroadcastModal] = useState(false);
-  const [showStagingModal, setShowStagingModal] = useState(false);
-  const [selectedStagingLead, setSelectedStagingLead] = useState<any>(null);
-
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth() + 1;
 
   // Fetch calendar data
-  const { data: calendarData = {}, refetch: refetchCalendar } = useCalendarMonth(year, month);
-
-  // Fetch task queue for selected date
-  const { data: taskQueue, isLoading: isLoadingQueue } = useDailyQueue(selectedDate);
+  const { data: calendarData = {} } = useCalendarMonth(year, month);
 
   // Fetch command center analytics
   const { data: analyticsData } = useCommandCenterAnalytics(selectedDate);
 
-  const updateLeadMutation = useUpdateLead();
+  // Fetch unverified payments count for badge (Team Lead only)
+  const { data: paymentUnverified = [] } = useQuery({
+    queryKey: ['students', 'payment-unverified'],
+    queryFn: () => studentsAPI.getPaymentUnverified(),
+    enabled: isTeamLead,
+  });
+  const unverifiedCount = paymentUnverified.length;
 
-  const handleDateSelect = (date: string) => {
-    setSelectedDate(date);
-    setFilterType(null); // Clear filter when date changes
-  };
+  const handleDateSelect = (date: string) => setSelectedDate(date);
 
   const handleMonthChange = (direction: 'prev' | 'next') => {
     setCurrentDate(new Date(year, month - 1 + (direction === 'next' ? 1 : -1), 1));
-  };
-
-  const handleUpdate = async (
-    leadId: number,
-    update: { status?: LeadStatus; next_date?: string | null }
-  ) => {
-    if (!update.status) {
-      return;
-    }
-    await updateLeadMutation.mutateAsync({
-      leadId,
-      update: {
-        status: update.status,
-        next_date: update.next_date,
-      },
-    });
-    // Refetch calendar to update heatmap
-    refetchCalendar();
-    // Refetch task queue immediately
-    queryClient.invalidateQueries({ queryKey: ['tasks'] });
-    queryClient.invalidateQueries({ queryKey: ['leads'] });
-    // Refetch analytics immediately
-    queryClient.invalidateQueries({ queryKey: ['analytics'] });
-    // Refetch immediately for instant UI update
-    await queryClient.refetchQueries({ queryKey: ['tasks', 'daily-queue', selectedDate] });
-    await queryClient.refetchQueries({ queryKey: ['analytics', 'command-center', selectedDate] });
-  };
-
-  const handleMetricClick = (metricType: string) => {
-    if (metricType === 'overdue' || metricType === 'unscheduled' || metricType === 'skill_reports' || metricType === 'hot_trials' || metricType === 'reschedule' || metricType === 'post_trial_no_response' || metricType === 'renewals' || metricType === 'nurture_reengage' || metricType === 'milestones' || metricType === 'on_break' || metricType === 'returning_soon') {
-      setFilterType(metricType as 'overdue' | 'unscheduled' | 'skill_reports' | 'hot_trials' | 'reschedule' | 'post_trial_no_response' | 'renewals' | 'nurture_reengage' | 'milestones' | 'on_break' | 'returning_soon');
-    }
   };
 
   return (
@@ -126,7 +85,7 @@ export default function CommandCenterPage() {
                 onClick={() => setCurrentView('sales')}
                 className={`py-4 px-1 border-b-2 font-medium text-sm ${
                   currentView === 'sales'
-                    ? 'border-blue-500 text-blue-600'
+                    ? 'border-tofa-gold text-tofa-gold'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                 }`}
               >
@@ -136,11 +95,26 @@ export default function CommandCenterPage() {
                 onClick={() => setCurrentView('executive')}
                 className={`py-4 px-1 border-b-2 font-medium text-sm ${
                   currentView === 'executive'
-                    ? 'border-blue-500 text-blue-600'
+                    ? 'border-tofa-gold text-tofa-gold'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                 }`}
               >
                 Executive View
+              </button>
+              <button
+                onClick={() => setCurrentView('unverified')}
+                className={`py-4 px-1 border-b-2 font-medium text-sm flex items-center gap-2 ${
+                  currentView === 'unverified'
+                    ? 'border-tofa-gold text-tofa-gold'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                Unverified Payments
+                {unverifiedCount > 0 && (
+                  <span className="ml-1 inline-flex items-center justify-center min-w-[1.25rem] h-5 px-1.5 text-xs font-bold text-white bg-amber-500 rounded-full">
+                    {unverifiedCount}
+                  </span>
+                )}
               </button>
             </nav>
           </div>
@@ -176,7 +150,7 @@ export default function CommandCenterPage() {
                       <div className="flex items-center justify-between">
                         <div>
                           <p className="font-semibold text-gray-900">{opp.batch_name}</p>
-                          <p className="text-sm text-gray-600">{opp.center_name} • {opp.age_category}</p>
+                          <p className="text-sm text-gray-600">{opp.center_name} • {opp.min_age != null && opp.max_age != null ? `${opp.min_age}–${opp.max_age}` : '—'}</p>
                         </div>
                         <div className="text-right">
                           <p className="text-2xl font-bold text-yellow-600">{opp.reactivation_count}</p>
@@ -190,33 +164,14 @@ export default function CommandCenterPage() {
               </div>
             )}
             
-            {/* Top Section: Metric Cards Row (Full Width) */}
-            <div className="mt-8">
-              <MetricCards
-                salesMetrics={analyticsData}
-                coachMetrics={analyticsData}
-                onMetricClick={handleMetricClick}
-              />
-            </div>
-
-            {/* Main Section: Two-Column Grid (Action Stream + Context Sidebar) */}
-            <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 mt-10">
-              {/* Left Column: Action Stream (75% = 3/4 cols) */}
-              <div className="lg:col-span-3">
-                <ActionQueue
-                  selectedDate={selectedDate}
-                  taskQueue={taskQueue}
-                  isLoading={isLoadingQueue}
-                  onUpdate={handleUpdate}
-                  filterType={filterType}
-                  onClearFilter={() => setFilterType(null)}
-                />
+            {/* Main Content: Action Grid + Intelligence, Sidebar */}
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 mt-8">
+              <div className="lg:col-span-3 space-y-10">
+                <ActionGrid analyticsData={analyticsData} />
+                <StrategicIntelligence />
               </div>
-
-              {/* Right Column: Context Sidebar (25% = 1/4 cols) */}
-              <div className="lg:col-span-1 space-y-6">
-                {/* Mini Calendar Navigator Widget */}
-                <div className="bg-white rounded-2xl shadow-xl p-4">
+              <div className="lg:col-span-1">
+                <CommandCenterSidebar>
                   <CalendarHeatmap
                     year={year}
                     month={month}
@@ -226,27 +181,7 @@ export default function CommandCenterPage() {
                     onMonthChange={handleMonthChange}
                     compact={true}
                   />
-                </div>
-
-                {/* Executive Intelligence Sidebar */}
-                <ExecutiveSidebar />
-
-                {/* Unscheduled Inbox */}
-                <div className="bg-white rounded-2xl shadow-xl p-4">
-                  <h3 className="text-sm font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                    <span>📥</span>
-                    <span>Unscheduled Pipeline</span>
-                  </h3>
-                  <UnscheduledInbox 
-                    filterType={(() => {
-                      const validFilters: Array<'overdue' | 'unscheduled' | 'skill_reports' | 'hot_trials' | 'reschedule' | 'post_trial_no_response'> = 
-                        ['overdue', 'unscheduled', 'skill_reports', 'hot_trials', 'reschedule', 'post_trial_no_response'];
-                      return filterType && validFilters.includes(filterType as any) 
-                        ? (filterType as 'overdue' | 'unscheduled' | 'skill_reports' | 'hot_trials' | 'reschedule' | 'post_trial_no_response')
-                        : null;
-                    })()} 
-                  />
-                </div>
+                </CommandCenterSidebar>
               </div>
             </div>
           </>
@@ -255,6 +190,11 @@ export default function CommandCenterPage() {
         {/* Executive View (Team Lead only) */}
         {isTeamLead && currentView === 'executive' && (
           <ExecutiveDashboard executiveData={analyticsData?.executive_data} />
+        )}
+
+        {/* Unverified Payments (Team Lead only) */}
+        {isTeamLead && currentView === 'unverified' && (
+          <UnverifiedPaymentsView />
         )}
 
         {/* Reactivation Broadcast Modal */}
@@ -268,7 +208,7 @@ export default function CommandCenterPage() {
             batchId={selectedReactivationBatch.batch_id}
             batchName={selectedReactivationBatch.batch_name}
             centerName={selectedReactivationBatch.center_name}
-            ageCategory={selectedReactivationBatch.age_category}
+            ageGroup={selectedReactivationBatch.min_age != null && selectedReactivationBatch.max_age != null ? `${selectedReactivationBatch.min_age}–${selectedReactivationBatch.max_age}` : ''}
             batchSchedule="Monday-Friday"  // Would need actual batch schedule from batch data
             batchTime="4:00 PM - 6:00 PM"  // Would need actual batch time from batch data
           />

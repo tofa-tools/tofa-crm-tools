@@ -29,7 +29,8 @@ def create_user(
     password: str,
     full_name: str,
     role: str,
-    center_ids: List[int]
+    center_ids: List[int],
+    phone: str
 ) -> User:
     """
     Create a new user and assign them to centers.
@@ -58,7 +59,8 @@ def create_user(
         email=email,
         hashed_password=get_password_hash(password),
         full_name=full_name,
-        role=role
+        role=role,
+        phone=phone
     )
     db.add(new_user)
     db.commit()
@@ -82,6 +84,7 @@ def update_user(
     db: Session,
     user_id: int,
     full_name: Optional[str] = None,
+    phone: Optional[str] = None,
     role: Optional[str] = None,
     is_active: Optional[bool] = None,
     password: Optional[str] = None,
@@ -112,6 +115,8 @@ def update_user(
     # Update basic fields
     if full_name is not None:
         user.full_name = full_name
+    if phone is not None:
+        user.phone = phone
     if role is not None:
         user.role = role
     if is_active is not None:

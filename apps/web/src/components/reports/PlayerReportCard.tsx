@@ -6,7 +6,7 @@ import { brandConfig } from '@tofa/core';
 
 interface PlayerReportCardProps {
   playerName: string;
-  ageCategory: string;
+  ageGroup: string;
   centerName: string;
   technicalScore: number;
   fitnessScore: number;
@@ -17,7 +17,7 @@ interface PlayerReportCardProps {
 
 export function PlayerReportCard({
   playerName,
-  ageCategory,
+  ageGroup,
   centerName,
   technicalScore,
   fitnessScore,
@@ -46,8 +46,8 @@ export function PlayerReportCard({
         <div className="flex items-center justify-between mb-2">
           <h1 className="text-2xl font-bold">{playerName}</h1>
           <div className="text-right">
-            <div className="text-3xl font-bold">{ageCategory}</div>
-            <div className="text-xs opacity-90">Age Category</div>
+            <div className="text-3xl font-bold">{ageGroup}</div>
+            <div className="text-xs opacity-90">Age Group</div>
           </div>
         </div>
         <p className="text-sm opacity-90">{centerName}</p>

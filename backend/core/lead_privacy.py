@@ -33,7 +33,6 @@ def mask_lead_for_coach(lead: Lead) -> Dict[str, Any]:
         "created_time": format_datetime(lead.created_time),
         "last_updated": format_datetime(lead.last_updated),
         "player_name": lead.player_name,
-        "player_age_category": lead.player_age_category,
         "date_of_birth": lead.date_of_birth.isoformat() if lead.date_of_birth else None,
         "phone": None,  # Masked
         "email": None,  # Masked
@@ -50,8 +49,10 @@ def mask_lead_for_coach(lead: Lead) -> Dict[str, Any]:
         "preferred_timing_notes": lead.preferred_timing_notes,
         "loss_reason": lead.loss_reason,
         "loss_reason_notes": lead.loss_reason_notes,
+        "status_at_loss": getattr(lead, "status_at_loss", None),
         "reschedule_count": lead.reschedule_count if hasattr(lead, 'reschedule_count') else 0,
         "do_not_contact": lead.do_not_contact,
+        "needs_escalation": getattr(lead, "needs_escalation", False),
         "student_batch_ids": [],  # Empty list for leads (batches are on Student model)
     }
     return lead_dict
@@ -95,7 +96,6 @@ def serialize_leads_for_user(leads: List[Lead], user_role: str) -> List[Dict[str
                 "created_time": format_datetime(lead.created_time),
                 "last_updated": format_datetime(lead.last_updated),
                 "player_name": lead.player_name,
-                "player_age_category": lead.player_age_category,
                 "date_of_birth": lead.date_of_birth.isoformat() if lead.date_of_birth else None,
                 "phone": lead.phone,
                 "email": lead.email,
@@ -112,9 +112,14 @@ def serialize_leads_for_user(leads: List[Lead], user_role: str) -> List[Dict[str
                 "preferred_timing_notes": lead.preferred_timing_notes,
                 "loss_reason": lead.loss_reason,
                 "loss_reason_notes": lead.loss_reason_notes,
+                "status_at_loss": getattr(lead, "status_at_loss", None),
                 "reschedule_count": lead.reschedule_count if hasattr(lead, 'reschedule_count') else 0,
                 "do_not_contact": lead.do_not_contact,
+                "needs_escalation": getattr(lead, "needs_escalation", False),
                 "student_batch_ids": [],  # Empty list for leads (batches are on Student model)
+                "enrollment_link_sent_at": format_datetime(getattr(lead, "enrollment_link_sent_at", None)),
+                "link_expires_at": format_datetime(getattr(lead, "link_expires_at", None)),
+                "pending_subscription_data": getattr(lead, "pending_subscription_data", None),
             }
             for lead in leads
         ]

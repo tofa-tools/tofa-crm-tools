@@ -7,7 +7,7 @@ import type { Lead } from '@tofa/core';
 import { leadsAPI } from '@/lib/api';
 import toast from 'react-hot-toast';
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000').replace(/\/+$/, '');
 
 interface ReactivationBroadcastModalProps {
   isOpen: boolean;
@@ -16,7 +16,7 @@ interface ReactivationBroadcastModalProps {
   batchId?: number;
   batchName: string;
   centerName: string;
-  ageCategory: string;
+  ageGroup: string;
   batchSchedule: string;
   batchTime: string;
   batchPublicLink?: string;
@@ -29,7 +29,7 @@ export function ReactivationBroadcastModal({
   batchId,
   batchName,
   centerName,
-  ageCategory,
+  ageGroup,
   batchSchedule,
   batchTime,
   batchPublicLink,
@@ -82,7 +82,7 @@ export function ReactivationBroadcastModal({
     const prefUrl = lead.public_token ? `${baseUrl}/pref/${lead.public_token}` : (batchPublicLink || `${baseUrl}/batches`);
     const parentName = lead.player_name.split(' ')[0];
     
-    const message = `Hi ${parentName}, great news! We just launched a NEW ${ageCategory} batch at TOFA ${centerName} on ${batchSchedule} at ${batchTime}. Since you were interested before, we wanted to give you priority! 
+    const message = `Hi ${parentName}, great news! We just launched a NEW ${ageGroup} batch at TOFA ${centerName} on ${batchSchedule} at ${batchTime}. Since you were interested before, we wanted to give you priority! 
 
 Choose your preferred slot here: ${prefUrl}`;
     
@@ -167,7 +167,7 @@ Choose your preferred slot here: ${prefUrl}`;
             <div className="mb-6 p-4 bg-gradient-to-r from-indigo-50 to-blue-50 border border-indigo-200 rounded-lg">
               <p className="text-sm font-semibold text-indigo-900 mb-2">✨ New Batch Details:</p>
               <p className="text-base font-bold text-indigo-800">
-                {batchName} ({ageCategory})
+                {batchName} ({ageGroup})
               </p>
               <p className="text-sm text-indigo-700 mt-1">
                 📍 {centerName} • 🗓️ {batchSchedule} at {batchTime}

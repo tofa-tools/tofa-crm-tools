@@ -1,15 +1,15 @@
 # Manual Google Cloud Build: Web — build (with API URL), push to Artifact Registry, deploy to Cloud Run
 # Run from repo root. Pass your API URL (use https:// in production):
-#   gcloud builds submit . --config=web-deploy.yaml --substitutions=_API_URL=https://api-xxxxx-asia-south1.run.app
+#   gcloud builds submit . --config=web-deploy.yaml --substitutions=_API_URL=https://api-xxxxx-asia-east1.run.app
 #
 # Substitutions:
 #   _API_URL    — Required. NEXT_PUBLIC_API_URL for the frontend (use https:// for production)
-#   _REGION     — Optional. Default asia-south1
+#   _REGION     — Optional. Default asia-east1
 #   _REPO_NAME  — Optional. Default tofa-repo
 
 substitutions:
   _API_URL: ''
-  _REGION: 'asia-south1'
+  _REGION: 'asia-east1'
   _REPO_NAME: 'tofa-repo'
 
 options:
@@ -22,7 +22,7 @@ steps:
     args:
       - 'build'
       - '-f'
-      - 'Dockerfile.web'
+      - 'web.prod.dockerfile'
       - '--build-arg'
       - 'NEXT_PUBLIC_API_URL=${_API_URL}'
       - '-t'

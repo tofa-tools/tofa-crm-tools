@@ -12,7 +12,7 @@ import { useLeads } from '@/hooks/useLeads';
 import { useStudents } from '@/hooks/useStudents';
 import type { Lead, LeadStatus, Batch } from '@tofa/core';
 import { LeadUpdateModal } from '@/components/leads/LeadUpdateModal';
-import { isToday as isTodayDate, getDateNDaysFromNow, isWithinLastNHours, calculateDaysRemaining, isRenewalDueWithinDays, getBatchesForDate } from '@tofa/core';
+import { isToday as isTodayDate, getDateNDaysFromNow, isWithinLastNHours, calculateDaysRemaining, isRenewalDueWithinDays, getBatchesForDate, calculateAge } from '@tofa/core';
 
 interface ActionQueueProps {
   selectedDate: string;
@@ -378,7 +378,7 @@ export function ActionQueue({
                         <div className="flex-1">
                           <h4 className="font-semibold text-gray-900 text-sm">{batch.name}</h4>
                           <p className="text-xs text-gray-600 mt-1">
-                            {batch.age_category} • {batch.start_time ? format(new Date(`2000-01-01T${batch.start_time}`), 'h:mm a') : 'Time TBD'}
+                            {batch.min_age != null && batch.max_age != null ? `${batch.min_age}–${batch.max_age}` : '—'} • {batch.start_time ? format(new Date(`2000-01-01T${batch.start_time}`), 'h:mm a') : 'Time TBD'}
                           </p>
                         </div>
                         <CheckCircle className="h-5 w-5 text-emerald-600" />
@@ -676,7 +676,7 @@ function LeadCard({ lead, onCall, onUpdate, filterType }: LeadCardProps & { filt
             )}
           </div>
           <p className="text-xs text-gray-600">
-            {lead.player_age_category || 'Age N/A'}
+            {lead.date_of_birth ? (calculateAge(lead.date_of_birth) ?? '—') : '—'}
           </p>
           {filterType === 'renewals' && lead.subscription_plan && lead.subscription_end_date && (
             <div className="mt-2 p-2 bg-purple-50 border border-purple-200 rounded text-xs">
@@ -768,7 +768,7 @@ function EnhancedLeadCard({ lead, onUpdate, filterType, section }: EnhancedLeadC
             )}
           </div>
           <p className="text-xs text-gray-600 mb-2">
-            {lead.player_age_category || 'Age N/A'}
+            {lead.date_of_birth ? (calculateAge(lead.date_of_birth) ?? '—') : '—'}
             {showFollowupDate && (
               <span className="ml-2 text-gray-500">
                 • {format(new Date(lead.next_followup_date), 'MMM d')}
@@ -849,7 +849,7 @@ function StudentRenewalCard({ student, onUpdate }: StudentRenewalCardProps) {
             )}
           </div>
           <p className="text-xs text-gray-600 mb-2">
-            {student.player_age_category || student.lead_player_age_category || 'Age N/A'}
+            {student.lead_player_age ?? '—'}
           </p>
 
           {/* Subscription Plan Info */}

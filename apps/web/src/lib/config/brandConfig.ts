@@ -10,7 +10,9 @@ export const brandConfig = {
   shortName: process.env.NEXT_PUBLIC_ACADEMY_SHORT_NAME || 'TOFA',
   logo: process.env.NEXT_PUBLIC_LOGO_PATH || '/logo.png',
   supportPhone: process.env.NEXT_PUBLIC_SUPPORT_PHONE || '+91XXXXXXXXXX',
-  
+  /** UPI ID for payment links (e.g. yourname@ybl) */
+  upiId: process.env.NEXT_PUBLIC_UPI_PAYEE_ID || 'yourname@ybl',
+
   /**
    * Message Templates - WhatsApp & Communication
    * 

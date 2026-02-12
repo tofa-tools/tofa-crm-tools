@@ -15,14 +15,14 @@ steps:
       - '-f'
       - 'Dockerfile.api'
       - '-t'
-      - 'asia-south1-docker.pkg.dev/${PROJECT_ID}/tofa-repo/api:latest'
+      - 'asia-east1-docker.pkg.dev/${PROJECT_ID}/tofa-repo/api:latest'
       - '.'
 
   # Step 2: Push to Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - 'asia-south1-docker.pkg.dev/${PROJECT_ID}/tofa-repo/api:latest'
+      - 'asia-east1-docker.pkg.dev/${PROJECT_ID}/tofa-repo/api:latest'
 
   # Step 3: Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
@@ -32,9 +32,9 @@ steps:
       - 'deploy'
       - 'api'
       - '--image'
-      - 'asia-south1-docker.pkg.dev/${PROJECT_ID}/tofa-repo/api:latest'
+      - 'asia-east1-docker.pkg.dev/${PROJECT_ID}/tofa-repo/api:latest'
       - '--region'
-      - 'asia-south1'
+      - 'asia-east1'
       - '--platform'
       - 'managed'
       - '--project'
@@ -44,8 +44,7 @@ steps:
       - '8080'
       - '--update-secrets'
       - 'DATABASE_URL=DATABASE_URL:latest'
-      - '--set-env-vars'
-      - 'PYTHONUNBUFFERED=1,PYTHONPATH=/app'
+      - '--set-env-vars=PYTHONUNBUFFERED=1,PYTHONPATH=/app,CORS_ORIGINS=https://tofafootballacademy.com;https://www.tofafootballacademy.com;http://localhost:3000'    
 
 images:
-  - 'asia-south1-docker.pkg.dev/${PROJECT_ID}/tofa-repo/api:latest'
+  - 'asia-east1-docker.pkg.dev/${PROJECT_ID}/tofa-repo/api:latest'

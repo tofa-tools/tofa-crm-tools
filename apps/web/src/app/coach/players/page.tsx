@@ -37,12 +37,13 @@ export default function CoachPlayersPage() {
   const [selectedStudent, setSelectedStudent] = useState<{ leadId: number; name: string; studentId?: number } | null>(null);
   const [shouldReload, setShouldReload] = useState(false);
 
-  // Reload page after skill report success (runs in browser only)
+  // Reload page after skill report success (client-only; use router.refresh to avoid location/window on server)
   useEffect(() => {
-    if (shouldReload && typeof window !== 'undefined') {
-      window.location.reload();
+    if (shouldReload) {
+      router.refresh();
+      setShouldReload(false);
     }
-  }, [shouldReload]);
+  }, [shouldReload, router]);
 
   // Fetch coach's batches
   const { data: coachBatchesData, isLoading: batchesLoading } = useCoachBatches();
@@ -234,9 +235,14 @@ export default function CoachPlayersPage() {
       .slice(0, 2);
   };
 
-  // Redirect if not a coach
+  // Redirect if not a coach (useEffect avoids location access during SSR/static gen)
+  useEffect(() => {
+    if (typeof window !== 'undefined' && user?.role !== 'coach') {
+      router.push('/command-center');
+    }
+  }, [user, router]);
+
   if (user?.role !== 'coach') {
-    router.push('/command-center');
     return null;
   }
 
@@ -257,10 +263,9 @@ export default function CoachPlayersPage() {
     <MainLayout>
       <div className="min-h-screen bg-slate-50 pb-24 flex flex-col">
         {/* Compact Dark Header */}
-        <div className="sticky top-0 z-20 bg-gradient-to-r from-brand-primary to-brand-primary/90 text-white shadow-2xl border-b-4 border-brand-accent/30">
+        <div className="sticky top-0 z-20 bg-[#0A192F] text-white shadow-2xl border-b-4 border-brand-accent/30 overflow-hidden">
           <div className="px-4 py-3">
             <div className="flex items-center gap-3 mb-2">
-              {/* Small Logo */}
               <div className="flex-shrink-0">
                 <Image
                   src="/logo.png"
@@ -272,15 +277,14 @@ export default function CoachPlayersPage() {
               </div>
               <h1 className="text-lg font-black uppercase tracking-tight">PLAYER ROSTER</h1>
             </div>
-            {/* Slim Search Bar - Pinned Below Header */}
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/70" />
               <input
                 type="text"
                 placeholder="Search..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-3 py-2 bg-white/10 backdrop-blur-sm border border-white/20 rounded-lg text-sm text-white placeholder:text-gray-300 focus:ring-2 focus:ring-brand-accent focus:border-brand-accent outline-none font-medium"
+                className="w-full pl-10 pr-3 py-2 bg-white/15 border border-white/25 rounded-lg text-sm text-white placeholder:text-white/60 focus:ring-2 focus:ring-tofa-gold/50 focus:border-tofa-gold/50 outline-none font-medium"
               />
             </div>
           </div>
@@ -374,9 +378,9 @@ export default function CoachPlayersPage() {
                                 <h3 className="text-base font-black text-gray-900 uppercase tracking-tight truncate">
                                   {playerName}
                                 </h3>
-                                {student.lead?.player_age_category && (
+                                {student.lead_player_age != null && (
                                   <span className="px-2 py-0.5 text-[10px] font-bold text-gray-600 bg-gray-100 rounded uppercase tracking-wide flex-shrink-0">
-                                    {student.lead.player_age_category}
+                                    Age: {student.lead_player_age}
                                   </span>
                                 )}
                                 {student.needsFinalReport && (

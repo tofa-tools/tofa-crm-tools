@@ -3,6 +3,7 @@ Lead staging management logic.
 Handles creation, retrieval, and promotion of staged leads.
 """
 from sqlmodel import Session, select
+from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from datetime import datetime, date, timedelta
 import uuid
@@ -72,6 +73,8 @@ def create_staging_lead(
     phone: str,
     center_id: int,
     email: Optional[str] = None,
+    age: Optional[int] = None,
+    date_of_birth: Optional[date] = None,
     created_by_id: Optional[int] = None
 ) -> LeadStaging:
     """
@@ -83,6 +86,7 @@ def create_staging_lead(
         phone: Phone number
         center_id: Center ID
         email: Optional email address
+        age: Optional numeric age (captured by coach)
         created_by_id: Optional user ID who created this (coach)
         
     Returns:
@@ -108,6 +112,8 @@ def create_staging_lead(
         player_name=player_name,
         phone=phone,
         email=email,
+        age=age,
+        date_of_birth=date_of_birth,
         center_id=center_id,
         created_by_id=created_by_id,
         created_at=datetime.utcnow()
@@ -157,8 +163,8 @@ def get_staging_leads(
         query = query.where(LeadStaging.center_id == center_id)
     
     query = query.order_by(LeadStaging.created_at.desc())
-    
-    return list(db.exec(query).all())
+    stmt = query.options(selectinload(LeadStaging.center))
+    return list(db.exec(stmt).all())
 
 
 def get_staging_lead_by_id(
@@ -181,11 +187,10 @@ def get_staging_lead_by_id(
 def promote_staging_lead(
     db: Session,
     staging_id: int,
-    player_age_category: str,  # Required for promotion
+    date_of_birth: Optional[date] = None,
     email: Optional[str] = None,
     address: Optional[str] = None,
-    date_of_birth: Optional[date] = None,
-    user_id: Optional[int] = None
+    user_id: Optional[int] = None,
 ) -> Lead:
     """
     Promote a staging lead to a full Lead record.
@@ -193,48 +198,71 @@ def promote_staging_lead(
     Args:
         db: Database session
         staging_id: Staging lead ID
+        date_of_birth: Required date of birth (YYYY-MM-DD) - or derived from staging.age
         email: Optional email address
         address: Optional address
-        player_age_category: Required age category
-        date_of_birth: Optional date of birth
         user_id: Optional user ID who promoted this
         
     Returns:
         Created Lead object
         
     Raises:
-        ValueError: If staging lead not found
+        ValueError: If staging lead not found or no DOB/age available
     """
     staging = db.get(LeadStaging, staging_id)
     if not staging:
         raise ValueError(f"Staging lead {staging_id} not found")
     
-    # Age category is required for promotion
-    if not player_age_category:
-        raise ValueError("player_age_category is required to promote a staging lead")
+    # Need date_of_birth - use provided, or from staging, or approximate from staging.age
+    final_dob = date_of_birth
+    if not final_dob and getattr(staging, "date_of_birth", None):
+        final_dob = staging.date_of_birth
+    if not final_dob and staging.age is not None:
+        from datetime import date as date_type
+        year = datetime.utcnow().year - staging.age
+        final_dob = date_type(year, 1, 1)  # Approximate: Jan 1
+    if not final_dob:
+        raise ValueError("date_of_birth or age (from staging) is required to promote a staging lead")
     
     # Use email from staging if not provided
     final_email = email or staging.email
     
-    # Create full Lead record
+    # Get center name for audit note
+    center = db.get(Center, staging.center_id)
+    center_name = center.display_name if center else "Unknown"
+    
+    # Create full Lead record — Fast-track: Trial Attended + 24h follow-up for immediate closing
     from datetime import timedelta
     initial_followup = datetime.utcnow() + timedelta(hours=24)
     
+    now = datetime.utcnow()
     new_lead = Lead(
-        created_time=datetime.utcnow(),
+        created_time=now,
+        last_updated=now,
         player_name=staging.player_name,
-        player_age_category=player_age_category,
-        date_of_birth=date_of_birth,
+        date_of_birth=final_dob,
         phone=staging.phone,
         email=final_email,
         address=address,
         center_id=staging.center_id,
-        status="New",
+        status="Trial Attended",  # Fast-track: appears in "Hot: Ready to Join" for payment collection
         public_token=str(uuid.uuid4()),
         next_followup_date=initial_followup
     )
     
     db.add(new_lead)
+    db.flush()  # Get new_lead.id before audit
+    
+    # Audit: reflect fast-track promotion
+    if user_id:
+        from backend.core.audit import log_lead_activity
+        log_lead_activity(
+            db=db,
+            lead_id=new_lead.id,
+            user_id=user_id,
+            action_type="field_capture_promotion",
+            description="Lead promoted from field capture; status set to Trial Attended for immediate closing.",
+        )
     
     # Delete staging record
     db.delete(staging)

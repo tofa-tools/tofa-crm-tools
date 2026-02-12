@@ -8,7 +8,7 @@ import { useCenters, useCreateCenter, useUpdateCenter } from '@/hooks/useCenters
 import { useAuth } from '@/context/AuthContext';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
-import { Edit, Plus } from 'lucide-react';
+import { Edit, MapPin } from 'lucide-react';
 import type { Center } from '@tofa/core';
 
 export default function CentersPage() {
@@ -24,6 +24,8 @@ export default function CentersPage() {
   const [metaTag, setMetaTag] = useState('');
   const [city, setCity] = useState('');
   const [location, setLocation] = useState('');
+  const [mapLink, setMapLink] = useState('');
+  const [groupEmail, setGroupEmail] = useState('');
   const [error, setError] = useState('');
   const [showForm, setShowForm] = useState(true);
 
@@ -43,6 +45,8 @@ export default function CentersPage() {
     setMetaTag('');
     setCity('');
     setLocation('');
+    setMapLink('');
+    setGroupEmail('');
     setError('');
   };
 
@@ -52,6 +56,8 @@ export default function CentersPage() {
     setMetaTag(center.meta_tag_name);
     setCity(center.city);
     setLocation(center.location || '');
+    setMapLink(center.map_link || '');
+    setGroupEmail(center.group_email || '');
     setShowForm(true);
     setError('');
     
@@ -84,6 +90,8 @@ export default function CentersPage() {
             meta_tag_name: metaTag,
             city,
             location: location || undefined,
+            map_link: mapLink.trim() || undefined,
+            group_email: groupEmail.trim() || undefined,
           },
         });
         resetForm();
@@ -95,6 +103,8 @@ export default function CentersPage() {
           meta_tag_name: metaTag,
           city,
           location: location || undefined,
+          map_link: mapLink.trim() || undefined,
+          group_email: groupEmail.trim() || undefined,
         });
         resetForm();
         alert('✅ Center created successfully!');
@@ -153,7 +163,7 @@ export default function CentersPage() {
                     type="text"
                     value={displayName}
                     onChange={(e) => setDisplayName(e.target.value)}
-                    placeholder="e.g. TOFA Tellapur"
+                    placeholder=""
                     required
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-tofa-gold focus:border-tofa-gold outline-none"
                   />
@@ -193,6 +203,31 @@ export default function CentersPage() {
                     onChange={(e) => setLocation(e.target.value)}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-tofa-gold focus:border-tofa-gold outline-none"
                   />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Google Maps Link
+                  </label>
+                  <input
+                    type="url"
+                    value={mapLink}
+                    onChange={(e) => setMapLink(e.target.value)}
+                    placeholder="https://maps.google.com/..."
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-tofa-gold focus:border-tofa-gold outline-none"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Center Head Email (Group)
+                  </label>
+                  <input
+                    type="email"
+                    value={groupEmail}
+                    onChange={(e) => setGroupEmail(e.target.value)}
+                    placeholder="e.g. ch_tellapur@tofafootballacademy.com (internal notifications)"
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-tofa-gold focus:border-tofa-gold outline-none"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Leave blank to send internal notifications to admin@tofafootballacademy.com for this center.</p>
                 </div>
               </div>
 
@@ -246,6 +281,12 @@ export default function CentersPage() {
                       Location
                     </th>
                     <th className="px-4 py-2 text-left text-xs font-bold text-tofa-gold uppercase tracking-wider">
+                      Map Link
+                    </th>
+                    <th className="px-4 py-2 text-left text-xs font-bold text-tofa-gold uppercase tracking-wider">
+                      Center Head Email (Group)
+                    </th>
+                    <th className="px-4 py-2 text-left text-xs font-bold text-tofa-gold uppercase tracking-wider">
                       Actions
                     </th>
                   </tr>
@@ -267,6 +308,24 @@ export default function CentersPage() {
                       </td>
                       <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-500">
                         {center.location || '-'}
+                      </td>
+                      <td className="px-4 py-2 whitespace-nowrap text-sm">
+                        {center.map_link ? (
+                          <a
+                            href={center.map_link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-700 hover:underline"
+                          >
+                            <MapPin className="h-4 w-4" />
+                            Open
+                          </a>
+                        ) : (
+                          <span className="text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-600">
+                        {center.group_email?.trim() ? center.group_email : <span className="text-gray-400">—</span>}
                       </td>
                       <td className="px-4 py-2 whitespace-nowrap text-sm">
                         <button

@@ -6,7 +6,7 @@ import { brandConfig } from '@tofa/core';
 
 interface PlayerSuccessCardProps {
   playerName: string;
-  ageCategory: string;
+  ageGroup: string;
   centerName?: string;
   technicalSkill: number;
   fitness: number;
@@ -17,7 +17,7 @@ interface PlayerSuccessCardProps {
 
 export function PlayerSuccessCard({
   playerName,
-  ageCategory,
+  ageGroup,
   centerName,
   technicalSkill,
   fitness,
@@ -142,7 +142,7 @@ export function PlayerSuccessCard({
                 fontWeight: 'bold',
               }}
             >
-              {ageCategory}
+              {ageGroup}
             </div>
           </div>
 

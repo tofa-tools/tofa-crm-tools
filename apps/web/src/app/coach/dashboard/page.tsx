@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { MainLayout } from '@/components/layout/MainLayout';
@@ -112,9 +112,14 @@ export default function CoachDashboardPage() {
     return days.join(', ') || 'No schedule';
   };
 
-  // Redirect if not a coach (EARLY RETURN - all hooks must be above this)
+  // Redirect if not a coach (useEffect avoids location access during SSR/static gen)
+  useEffect(() => {
+    if (typeof window !== 'undefined' && user?.role !== 'coach') {
+      router.push('/command-center');
+    }
+  }, [user, router]);
+
   if (user?.role !== 'coach') {
-    router.push('/command-center');
     return null;
   }
 
@@ -186,9 +191,9 @@ export default function CoachDashboardPage() {
                         <h3 className="text-base font-black text-gray-900 uppercase tracking-tight truncate">
                           {batch.name}
                         </h3>
-                        {batch.age_category && (
+                        {batch.min_age != null && batch.max_age != null && (
                           <span className="px-2 py-0.5 text-[10px] font-bold text-gray-600 bg-gray-100 rounded uppercase tracking-wide flex-shrink-0">
-                            {batch.age_category}
+                            {batch.min_age}–{batch.max_age}
                           </span>
                         )}
                       </div>

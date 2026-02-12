@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { useLeads } from '@/hooks/useLeads';
 import { StatusBadge } from '@/components/ui/StatusBadge';
 import type { Lead, LeadStatus } from '@tofa/core';
+import { calculateAge } from '@tofa/core';
 
 interface UnscheduledInboxProps {
   filterType?: 'overdue' | 'unscheduled' | 'skill_reports' | 'hot_trials' | 'reschedule' | 'post_trial_no_response' | null;
@@ -47,7 +48,7 @@ export function UnscheduledInbox({ filterType, onLeadClick }: UnscheduledInboxPr
                 {lead.player_name}
               </p>
               <p className="text-xs text-gray-600">
-                {lead.player_age_category || 'Age N/A'}
+                {lead.date_of_birth ? (calculateAge(lead.date_of_birth) ?? '—') : '—'}
               </p>
             </div>
             <StatusBadge status={lead.status as LeadStatus} />

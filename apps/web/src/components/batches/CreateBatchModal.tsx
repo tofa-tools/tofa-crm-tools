@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import type { BatchCreate } from '@tofa/core';
-import { AGE_CATEGORIES } from '@tofa/core';
 
 interface Center {
   id: number;
@@ -18,7 +17,7 @@ interface Coach {
 interface CreateBatchModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (data: BatchCreate & { age_category: string }) => Promise<void>;
+  onSubmit: (data: BatchCreate) => Promise<void>;
   centers: Center[];
   coaches: Coach[];
   isSubmitting?: boolean;
@@ -34,10 +33,11 @@ const SCHEDULE_DAYS = [
   { key: 'is_sun', label: 'Sun' },
 ] as const;
 
-const defaultBatch: BatchCreate & { age_category?: string } = {
+const defaultBatch: BatchCreate = {
   name: '',
   center_id: 0,
-  age_category: '',
+  min_age: 0,
+  max_age: 99,
   max_capacity: 20,
   is_mon: false,
   is_tue: false,
@@ -62,25 +62,24 @@ export function CreateBatchModal({
   isSubmitting = false,
 }: CreateBatchModalProps) {
   const [form, setForm] = useState(defaultBatch);
-  const [selectedAgeCategories, setSelectedAgeCategories] = useState<string[]>([]);
 
   useEffect(() => {
     if (isOpen) {
       setForm({ ...defaultBatch, start_date: new Date().toISOString().split('T')[0] });
-      setSelectedAgeCategories([]);
     }
   }, [isOpen]);
 
   const hasScheduleDays =
     form.is_mon || form.is_tue || form.is_wed || form.is_thu ||
     form.is_fri || form.is_sat || form.is_sun;
+  const ageValid = form.min_age <= form.max_age;
   const isFormValid =
-    !!form.name && form.center_id > 0 && selectedAgeCategories.length > 0 && !!form.start_date && hasScheduleDays &&
+    !!form.name && form.center_id > 0 && ageValid && !!form.start_date && hasScheduleDays &&
     (form.coach_ids?.length ?? 0) > 0;
 
   const handleSubmit = async () => {
     if (!isFormValid) return;
-    await onSubmit({ ...form, age_category: selectedAgeCategories.join(',') });
+    await onSubmit(form);
     onClose();
   };
 
@@ -103,7 +102,7 @@ export function CreateBatchModal({
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-accent focus:border-brand-accent outline-none"
-              placeholder="e.g., U9 Morning Batch"
+              placeholder=""
             />
           </div>
           <div>
@@ -119,26 +118,31 @@ export function CreateBatchModal({
               ))}
             </select>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Age Categories *</label>
-            <div className="flex flex-wrap gap-2 border border-gray-300 rounded-lg p-3 min-h-[3rem]">
-              {AGE_CATEGORIES.map((category) => (
-                <label key={category} className="flex items-center gap-2 cursor-pointer bg-gray-50 px-3 py-2 rounded-lg hover:bg-gray-100">
-                  <input
-                    type="checkbox"
-                    checked={selectedAgeCategories.includes(category)}
-                    onChange={(e) => {
-                      if (e.target.checked) setSelectedAgeCategories([...selectedAgeCategories, category]);
-                      else setSelectedAgeCategories(selectedAgeCategories.filter((c) => c !== category));
-                    }}
-                    className="rounded border-gray-300 text-brand-accent focus:ring-brand-accent"
-                  />
-                  <span className="text-sm">{category}</span>
-                </label>
-              ))}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Minimum Age *</label>
+              <input
+                type="number"
+                value={form.min_age}
+                onChange={(e) => setForm({ ...form, min_age: parseInt(e.target.value, 10) || 0 })}
+                min={0}
+                max={99}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-accent outline-none"
+              />
             </div>
-            {selectedAgeCategories.length === 0 && <p className="text-xs text-red-500 mt-1">Please select at least one age category</p>}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Maximum Age *</label>
+              <input
+                type="number"
+                value={form.max_age}
+                onChange={(e) => setForm({ ...form, max_age: parseInt(e.target.value, 10) || 99 })}
+                min={0}
+                max={99}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-accent outline-none"
+              />
+            </div>
           </div>
+          {!ageValid && <p className="text-xs text-red-500">Max age must be &ge; min age</p>}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Max Capacity</label>
             <input

@@ -27,7 +27,9 @@ def create_center(
     display_name: str,
     meta_tag_name: str,
     city: str,
-    location: str = ""
+    location: str = "",
+    map_link: Optional[str] = None,
+    group_email: Optional[str] = None
 ) -> Center:
     """
     Create a new center.
@@ -38,6 +40,8 @@ def create_center(
         meta_tag_name: Meta tag name (must be unique)
         city: City name
         location: Location details (optional)
+        map_link: Google Maps URL (optional)
+        group_email: Center Head / group email for internal notifications (optional)
         
     Returns:
         Created Center object
@@ -53,7 +57,9 @@ def create_center(
         display_name=display_name,
         meta_tag_name=meta_tag_name,
         city=city,
-        location=location
+        location=location,
+        map_link=map_link,
+        group_email=(group_email or "").strip() or None
     )
     
     db.add(new_center)
@@ -68,7 +74,9 @@ def update_center(
     display_name: Optional[str] = None,
     meta_tag_name: Optional[str] = None,
     city: Optional[str] = None,
-    location: Optional[str] = None
+    location: Optional[str] = None,
+    map_link: Optional[str] = None,
+    group_email: Optional[str] = None
 ) -> Center:
     """
     Update an existing center.
@@ -80,6 +88,8 @@ def update_center(
         meta_tag_name: New meta tag name (optional, must be unique)
         city: New city name (optional)
         location: New location details (optional)
+        map_link: Google Maps URL (optional)
+        group_email: Center Head / group email for internal notifications (optional)
         
     Returns:
         Updated Center object
@@ -104,7 +114,11 @@ def update_center(
         center.city = city
     if location is not None:
         center.location = location
-    
+    if map_link is not None:
+        center.map_link = map_link
+    if group_email is not None:
+        center.group_email = (group_email or "").strip() or None
+
     db.add(center)
     db.commit()
     db.refresh(center)

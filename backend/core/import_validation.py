@@ -8,31 +8,16 @@ import pandas as pd
 from datetime import datetime
 from backend.models import Center
 
-# Must match @tofa/core AGE_CATEGORIES: U5, U7, U9, U11, U13, U15, U17, Senior
-def calculate_age_category(dob_val) -> str:
-    """
-    Convert a Date of Birth (from Meta Ads CSV) into a U-Category.
-    Bands: U5 (<5), U7 (5-6), U9 (7-8), U11 (9-10), U13 (11-12), U15 (13-14), U17 (15-16), Senior (17+).
-    """
-    if pd.isna(dob_val) or str(dob_val).strip() == "":
-        return "Unknown"
-    
+def parse_date_of_birth(val) -> "Optional[date]":
+    """Parse DOB from various formats. Returns date or None."""
+    from datetime import date as date_type
+    if pd.isna(val) or str(val).strip() == "":
+        return None
     try:
-        # Attempt to parse the date (Meta usually uses YYYY-MM-DD)
-        dob = pd.to_datetime(dob_val)
-        today = datetime.now()
-        age = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
-        
-        if age < 5: return "U5"
-        elif age < 7: return "U7"
-        elif age < 9: return "U9"
-        elif age < 11: return "U11"
-        elif age < 13: return "U13"
-        elif age < 15: return "U15"
-        elif age < 17: return "U17"
-        else: return "Senior"
+        dob = pd.to_datetime(val)
+        return date_type(dob.year, dob.month, dob.day)
     except Exception:
-        return "Unknown"
+        return None
 
 def validate_lead_row(
     row: pd.Series,
@@ -105,9 +90,10 @@ def preview_import_data(
         for system_col, user_col in column_mapping.items():
             raw_val = row.get(user_col)
             
-            # If the system wants an age category but we have a DOB column, calculate it
-            if system_col == 'player_age_category' and user_col:
-                display_data[system_col] = calculate_age_category(raw_val)
+            # Map to date_of_birth for display
+            if system_col == 'date_of_birth' and user_col:
+                dob = parse_date_of_birth(raw_val)
+                display_data[system_col] = dob.isoformat() if dob else ""
             else:
                 display_data[system_col] = str(raw_val) if pd.notna(raw_val) else ""
 
@@ -152,7 +138,7 @@ def auto_detect_column_mapping(df: pd.DataFrame) -> Dict[str, str]:
         'phone': [r'contact_number', r'phone', r'mobile', r'contact'],
         'email': [r'email'],
         'center': [r'nearest_tofa_center', r'center', r'which_is_the_nearest'],
-        'player_age_category': [r'player_date_of_birth', r'dob', r'age', r'category'],
+        'date_of_birth': [r'player_date_of_birth', r'dob', r'age', r'date_of_birth', r'category'],
         'address_and_pincode': [r'address_&_pincode', r'address', r'pincode']
     }
 

@@ -3,9 +3,26 @@ Analytics and business intelligence functions.
 Framework-agnostic analytics utilities.
 """
 from sqlmodel import Session, select, func, and_, or_
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime, timedelta, date, time
 from backend.models import Lead, AuditLog, Batch, BatchCoachLink, Attendance, User, Center, Student, StudentBatchLink
+from backend.core.staging import get_staging_leads
+
+# Simple 5-minute cache for analytics (avoids DB hit on every page refresh)
+_ANALYTICS_CACHE: Dict[str, Tuple[Any, datetime]] = {}
+_CACHE_TTL = timedelta(minutes=5)
+
+
+def _cached(key: str, fn, *args, **kwargs):
+    """Return cached result if fresh, else compute and cache."""
+    now = datetime.utcnow()
+    if key in _ANALYTICS_CACHE:
+        val, expiry = _ANALYTICS_CACHE[key]
+        if expiry > now:
+            return val
+    result = fn(*args, **kwargs)
+    _ANALYTICS_CACHE[key] = (result, now + _CACHE_TTL)
+    return result
 
 
 def get_student_milestones(db: Session, student_id: int) -> Dict[str, any]:
@@ -123,81 +140,164 @@ def get_student_milestones(db: Session, student_id: int) -> Dict[str, any]:
 
 def calculate_conversion_rates(db: Session, user_id: Optional[int] = None) -> Dict[str, float]:
     """
-    Calculate conversion rates between status transitions.
+    Calculate conversion rates between status transitions using SQL grouping.
     
     Returns a dictionary with conversion rates like:
     {
         'New->Called': 0.75,  # 75% of New leads become Called
         'Called->Trial Scheduled': 0.50,  # 50% of Called leads become Trial Scheduled
-        'Trial Scheduled->Joined': 0.20,  # 20% of Trial Scheduled leads join
         ...
     }
     """
-    # Get all status change audit logs
-    query = select(AuditLog).where(AuditLog.action_type == 'status_change')
-    
+    # Transition counts: (old_value, new_value) -> count
+    trans_q = (
+        select(AuditLog.old_value, AuditLog.new_value, func.count(AuditLog.id).label("cnt"))
+        .where(
+            AuditLog.action_type == "status_change",
+            AuditLog.old_value.isnot(None),
+            AuditLog.new_value.isnot(None),
+        )
+    )
     if user_id:
-        query = query.where(AuditLog.user_id == user_id)
-    
-    status_changes = db.exec(query).all()
-    
-    # Count transitions
-    transition_counts: Dict[str, int] = {}  # 'old->new': count
-    status_counts: Dict[str, int] = {}  # status: count of leads that reached this status
-    
-    for change in status_changes:
-        if change.old_value and change.new_value:
-            transition_key = f"{change.old_value}->{change.new_value}"
-            transition_counts[transition_key] = transition_counts.get(transition_key, 0) + 1
-            status_counts[change.old_value] = status_counts.get(change.old_value, 0) + 1
-    
-    # Calculate conversion rates
+        trans_q = trans_q.where(AuditLog.user_id == user_id)
+    trans_q = trans_q.group_by(AuditLog.old_value, AuditLog.new_value)
+    trans_rows = db.exec(trans_q).all()
+
+    # Status counts: old_value -> total transitions from that status
+    status_q = (
+        select(AuditLog.old_value, func.count(AuditLog.id).label("cnt"))
+        .where(
+            AuditLog.action_type == "status_change",
+            AuditLog.old_value.isnot(None),
+            AuditLog.new_value.isnot(None),
+        )
+    )
+    if user_id:
+        status_q = status_q.where(AuditLog.user_id == user_id)
+    status_q = status_q.group_by(AuditLog.old_value)
+    status_rows = db.exec(status_q).all()
+
+    status_counts = {row.old_value: row.cnt for row in status_rows}
     conversion_rates: Dict[str, float] = {}
-    for transition, count in transition_counts.items():
-        old_status = transition.split('->')[0]
-        total_leads_in_old_status = status_counts.get(old_status, 1)  # Avoid division by zero
-        conversion_rate = count / total_leads_in_old_status if total_leads_in_old_status > 0 else 0.0
-        conversion_rates[transition] = conversion_rate
-    
+    for row in trans_rows:
+        transition_key = f"{row.old_value}->{row.new_value}"
+        total = status_counts.get(row.old_value, 1)
+        conversion_rates[transition_key] = row.cnt / total if total > 0 else 0.0
     return conversion_rates
+
+
+def get_conversion_funnel(db: Session) -> Dict:
+    """
+    Business-focused conversion funnel:
+    - Engagement: (Leads with preferences set / Total Leads)
+    - Commitment: (Trial Scheduled / Total Leads)
+    - Success: (Joined / Trial Attended) - Trial Attended approximated by Trial Scheduled count
+    """
+    total_leads = db.exec(select(func.count(Lead.id))).first() or 0
+    if total_leads == 0:
+        return {
+            "engagement": {"rate": 0.0, "numerator": 0, "denominator": 0},
+            "commitment": {"rate": 0.0, "numerator": 0, "denominator": 0},
+            "success": {"rate": 0.0, "numerator": 0, "denominator": 0},
+        }
+
+    # Engagement: Leads with preferences set (preferred_batch_id or preferred_call_time)
+    with_prefs = db.exec(
+        select(func.count(Lead.id)).where(
+            or_(Lead.preferred_batch_id.isnot(None), Lead.preferred_call_time.isnot(None))
+        )
+    ).first() or 0
+    eng_rate = with_prefs / total_leads if total_leads > 0 else 0.0
+
+    # Commitment: Trial Scheduled count
+    trial_scheduled = db.exec(
+        select(func.count(Lead.id)).where(Lead.status == "Trial Scheduled")
+    ).first() or 0
+    commitment_rate = trial_scheduled / total_leads if total_leads > 0 else 0.0
+
+    # Success: Joined / Trial Attended. Use Trial Scheduled as proxy for Trial Attended (includes current + those who moved on)
+    joined = db.exec(select(func.count(Lead.id)).where(Lead.status == "Joined")).first() or 0
+    trial_attended = trial_scheduled + joined
+    success_rate = joined / trial_attended if trial_attended > 0 else 0.0
+
+    return {
+        "engagement": {"rate": eng_rate, "numerator": with_prefs, "denominator": total_leads},
+        "commitment": {"rate": commitment_rate, "numerator": trial_scheduled, "denominator": total_leads},
+        "success": {"rate": success_rate, "numerator": joined, "denominator": trial_attended},
+    }
+
+
+def get_conversion_funnel_cached(db: Session) -> Dict:
+    """Cached version of get_conversion_funnel (5 min TTL)."""
+    return _cached("funnel", get_conversion_funnel, db)
+
+
+def calculate_average_time_to_contact_cached(db: Session) -> Optional[float]:
+    """Cached version of calculate_average_time_to_contact (5 min TTL)."""
+    return _cached("time_to_contact", calculate_average_time_to_contact, db)
+
+
+def get_conversion_rates_cached(db: Session) -> Dict:
+    """Cached conversion rates + funnel (5 min TTL)."""
+    def _fetch(_db):
+        return {"conversion_rates": calculate_conversion_rates(_db), "funnel": get_conversion_funnel(_db)}
+    return _cached("conversion_rates", _fetch, db)
 
 
 def calculate_average_time_to_contact(db: Session) -> Optional[float]:
     """
-    Calculate average time (in hours) from lead creation to first status change.
+    Calculate average time (in hours) from Parent Preference Submission to status changing to 'Called'.
+    
+    Uses preference_submitted_at in lead.extra_data (set when preferences are submitted via public form)
+    and AuditLog for when status changed to 'Called'.
     
     Returns average hours, or None if no data available.
     """
-    # Get all status change audit logs ordered by lead_id and timestamp
-    query = (
-        select(AuditLog)
-        .where(AuditLog.action_type == 'status_change')
-        .order_by(AuditLog.lead_id, AuditLog.timestamp.asc())
+    # First "Called" timestamp per lead via SQL (single query)
+    first_called_q = (
+        select(AuditLog.lead_id, func.min(AuditLog.timestamp).label("first_called"))
+        .where(
+            AuditLog.action_type == "status_change",
+            AuditLog.new_value == "Called",
+            AuditLog.lead_id.isnot(None),
+        )
+        .group_by(AuditLog.lead_id)
     )
-    
-    status_changes = db.exec(query).all()
-    
-    if not status_changes:
+    first_called_rows = db.exec(first_called_q).all()
+    if not first_called_rows:
         return None
-    
-    # Group by lead_id and get the first status change for each lead
-    first_changes_by_lead: Dict[int, datetime] = {}
-    for change in status_changes:
-        if change.lead_id not in first_changes_by_lead:
-            first_changes_by_lead[change.lead_id] = change.timestamp
-    
-    # Get created_time for each lead
+
+    lead_ids = [r.lead_id for r in first_called_rows if r.lead_id]
+    if not lead_ids:
+        return None
+
+    # Batch-fetch leads with preference_submitted_at (single query, filter by id in list)
+    leads = db.exec(select(Lead).where(Lead.id.in_(lead_ids))).all()
+    lead_pref: Dict[int, str] = {}
+    for lead in leads:
+        if lead and lead.extra_data and isinstance(lead.extra_data, dict):
+            pref = lead.extra_data.get("preference_submitted_at")
+            if pref:
+                lead_pref[lead.id] = pref
+
     total_hours = 0.0
     count = 0
-    
-    for lead_id, first_change_time in first_changes_by_lead.items():
-        lead = db.get(Lead, lead_id)
-        if lead:
-            time_diff = first_change_time - lead.created_time
-            hours = time_diff.total_seconds() / 3600.0
-            total_hours += hours
-            count += 1
-    
+    for row in first_called_rows:
+        lead_id = row.lead_id
+        pref_at = lead_pref.get(lead_id) if lead_id else None
+        if not pref_at:
+            continue
+        try:
+            pref_time = datetime.fromisoformat(pref_at.replace("Z", "+00:00"))
+            ct = row.first_called.replace(tzinfo=None) if row.first_called.tzinfo else row.first_called
+            pt = pref_time.replace(tzinfo=None) if pref_time.tzinfo else pref_time
+            hours = (ct - pt).total_seconds() / 3600.0
+            if 0 <= hours <= 8760:  # Sanity: 0 to 1 year
+                total_hours += hours
+                count += 1
+        except (ValueError, TypeError):
+            continue
+
     return total_hours / count if count > 0 else None
 
 
@@ -297,6 +397,8 @@ def _get_sales_command_center_analytics(
                 "reschedule_count": 0,
                 "post_trial_no_response_count": 0,
                 "expiring_soon_count": 0,
+                "staging_leads_count": 0,
+                "nudge_failures_count": 0,
             }
     
     all_leads = list(db.exec(base_query).all())
@@ -544,6 +646,41 @@ def _get_sales_command_center_analytics(
         if hit_milestone:
             milestones_count += 1
     
+    # Staging/field capture leads count (for team_lead and team_member)
+    staging_leads = get_staging_leads(db=db, user=user)
+    staging_leads_count = len(staging_leads)
+
+    # Nudge Failures: Preference link sent but not clicked within 48h (needs_escalation)
+    # Leads with status 'Followed up with message', preferences not submitted, and sent/updated > 48h ago
+    forty_eight_h_ago = datetime.utcnow() - timedelta(hours=48)
+    nudge_failure_query = select(Lead).where(
+        Lead.status == "Followed up with message",
+        Lead.preferences_submitted == False,
+    )
+    if user.role != "team_lead":
+        center_ids = [c.id for c in user.centers]
+        if center_ids:
+            nudge_failure_query = nudge_failure_query.where(Lead.center_id.in_(center_ids))
+    nudge_failure_leads = list(db.exec(nudge_failure_query).all())
+    nudge_failures_count = 0
+    for l in nudge_failure_leads:
+        sent_at = None
+        if l.extra_data and isinstance(l.extra_data, dict) and l.extra_data.get("preference_link_sent_at"):
+            try:
+                sent_at = datetime.fromisoformat(l.extra_data["preference_link_sent_at"].replace("Z", "+00:00"))
+                if sent_at.tzinfo:
+                    sent_at = sent_at.replace(tzinfo=None)
+            except (ValueError, TypeError):
+                pass
+        if sent_at is None:
+            sent_at = l.last_updated or (l.created_time if hasattr(l, "created_time") else None)
+        if sent_at and sent_at < forty_eight_h_ago:
+            nudge_failures_count += 1
+            l.needs_escalation = True
+            db.add(l)
+    if nudge_failures_count > 0:
+        db.commit()
+
     return {
         "today_progress": round(today_progress, 1),
         "today_progress_count": today_progress_count,
@@ -561,6 +698,8 @@ def _get_sales_command_center_analytics(
         "milestones_count": milestones_count,
         "on_break_count": on_break_count,
         "returning_soon_count": returning_soon_count,
+        "staging_leads_count": staging_leads_count,
+        "nudge_failures_count": nudge_failures_count,
     }
 
 
@@ -761,7 +900,8 @@ def get_new_batch_opportunities(db: Session, user: User, hours_back: int = 48) -
                 "batch_name": batch.name,
                 "center_id": batch.center_id,
                 "center_name": center.display_name if center else "Unknown",
-                "age_category": batch.age_category,
+                "min_age": batch.min_age,
+                "max_age": batch.max_age,
                 "reactivation_count": len(reactivation_leads),
             })
     
@@ -993,7 +1133,7 @@ def _get_executive_analytics(db: Session) -> Dict:
                         if coach_user:
                             coaches.append({
                                 "coach_id": coach_user.id,
-                                "coach_name": coach_user.name or coach_user.email,
+                                "coach_name": coach_user.full_name or coach_user.email,
                                 "coach_phone": getattr(coach_user, 'phone', None) or None,
                             })
                     
@@ -1033,6 +1173,37 @@ def _get_executive_analytics(db: Session) -> Dict:
     
     # Find #1 reason
     top_loss_reason = loss_analysis[0] if loss_analysis else None
+    
+    # 4b. Loss by Center and by Lifecycle Stage (status_at_loss): Dead/Not Interested and Nurture
+    loss_leads = db.exec(
+        select(Lead).where(
+            Lead.status.in_(["Dead/Not Interested", "Nurture"])
+        )
+    ).all()
+    loss_by_center: Dict[str, Dict[str, int]] = {}
+    loss_by_stage: Dict[str, Dict[str, int]] = {}  # stage (e.g. Called, Trial Attended) -> reason -> count
+    loss_by_center_and_stage: Dict[str, Dict[str, Dict[str, int]]] = {}  # center -> stage -> reason -> count
+    for lead in loss_leads:
+        center = db.get(Center, lead.center_id) if lead.center_id else None
+        center_name = center.display_name if center else "Unknown"
+        stage = getattr(lead, "status_at_loss", None) or "Unknown"
+        reason = lead.loss_reason or "Unknown"
+        # By center
+        if center_name not in loss_by_center:
+            loss_by_center[center_name] = {}
+        loss_by_center[center_name][reason] = loss_by_center[center_name].get(reason, 0) + 1
+        # By stage
+        if stage not in loss_by_stage:
+            loss_by_stage[stage] = {}
+        loss_by_stage[stage][reason] = loss_by_stage[stage].get(reason, 0) + 1
+        # By center and stage
+        if center_name not in loss_by_center_and_stage:
+            loss_by_center_and_stage[center_name] = {}
+        if stage not in loss_by_center_and_stage[center_name]:
+            loss_by_center_and_stage[center_name][stage] = {}
+        loss_by_center_and_stage[center_name][stage][reason] = (
+            loss_by_center_and_stage[center_name][stage].get(reason, 0) + 1
+        )
     
     # 5. Data Health: Orphaned Leads (status 'New' or 'Called' with center_id NULL)
     orphaned_leads = db.exec(
@@ -1224,13 +1395,52 @@ def _get_executive_analytics(db: Session) -> Dict:
     
     # Sort by compliance percentage descending
     coach_compliance_list.sort(key=lambda x: x["compliance_pct"], reverse=True)
-    
+
+    # 5. Center Performance: Merge attendance + compliance per center
+    name_to_id = {c.display_name: c.id for c in all_centers}
+    att_by_center = {a["center_id"]: a for a in attendance_leaderboard}
+    compliance_by_center: Dict[int, List[Dict]] = {}
+    for item in coach_compliance:
+        cid = name_to_id.get(item["center_name"])
+        if cid is not None:
+            if cid not in compliance_by_center:
+                compliance_by_center[cid] = []
+            compliance_by_center[cid].append(item)
+
+    center_performance = []
+    for center in all_centers:
+        att = att_by_center.get(center.id, {
+            "average_attendance_pct": 0.0,
+            "total_attendance": 0,
+            "expected_attendance": 0,
+            "previous_week_pct": 0.0,
+            "trend": "stable",
+        })
+        missing = compliance_by_center.get(center.id, [])
+        center_performance.append({
+            "center_id": center.id,
+            "center_name": center.display_name,
+            "average_attendance_pct": att.get("average_attendance_pct", 0.0),
+            "total_attendance": att.get("total_attendance", 0),
+            "expected_attendance": att.get("expected_attendance", 0),
+            "previous_week_pct": att.get("previous_week_pct"),
+            "trend": att.get("trend", "stable"),
+            "compliance_status": "compliant" if len(missing) == 0 else "missing",
+            "missing_sessions_count": len(missing),
+            "missing_sessions": missing,
+        })
+    center_performance.sort(key=lambda x: x["average_attendance_pct"], reverse=True)
+
     return {
         "attendance_leaderboard": attendance_leaderboard,
         "batch_utilization": batch_utilization,
         "coach_compliance": coach_compliance,
+        "center_performance": center_performance,
         "loss_analysis": loss_analysis,
         "top_loss_reason": top_loss_reason,
+        "loss_by_center": loss_by_center,
+        "loss_by_stage": loss_by_stage,
+        "loss_by_center_and_stage": loss_by_center_and_stage,
         "total_dead_leads": total_dead,
         "orphaned_leads_count": orphaned_leads_count,
         "orphaned_batches_count": orphaned_batches_count,

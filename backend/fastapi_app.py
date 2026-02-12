@@ -2,12 +2,14 @@
 FastAPI application using core business logic.
 All routes delegate to framework-agnostic core functions.
 """
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, status, Body, Request
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, status, Body, Request, BackgroundTasks
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlmodel import Session, select
+from sqlalchemy import and_
 from typing import List, Optional, Dict
+from pydantic import BaseModel
 import pandas as pd
 from datetime import datetime
 import os
@@ -53,8 +55,8 @@ from backend.core.bulk_operations import (
 from backend.core.centers import get_all_centers, create_center, update_center
 from backend.core.import_validation import preview_import_data, auto_detect_column_mapping
 from backend.core.analytics import (
-    calculate_conversion_rates, 
-    calculate_average_time_to_contact,
+    get_conversion_rates_cached,
+    calculate_average_time_to_contact_cached,
     get_status_distribution
 )
 from backend.core.pending_reports import get_pending_student_reports
@@ -76,24 +78,22 @@ from backend.core.skills import (
     create_skill_evaluation, get_skill_evaluations_for_lead, get_skill_summary_for_lead
 )
 from backend.core.staging import (
-    create_staging_lead, get_staging_leads, get_staging_lead_by_id, promote_staging_lead
+    create_staging_lead, get_staging_leads, get_staging_lead_by_id, promote_staging_lead,
+    check_duplicate_lead
 )
 from backend.core.reactivations import get_potential_reactivations
 from backend.core.attendance import record_attendance, get_attendance_history
 from backend.core.approvals import (
-    create_request, get_pending_requests, get_request_by_id,
-    resolve_request, get_requests_for_lead,
-    create_age_category_request, get_pending_age_category_requests,
-    resolve_age_category_request, get_age_category_requests_for_lead,
+    create_request,
+    get_pending_requests,
+    get_requests_for_lead,
+    resolve_request,
 )
 from backend.core.students import get_all_students, get_student_by_lead_id
 from backend.schemas.leads import LeadPreferencesRead, LeadPreferencesUpdate
 from backend.models import User, Center, Lead, Student
 from backend.schemas.users import UserCreateSchema, UserUpdateSchema
 from backend.schemas.bulk import BulkUpdateStatusRequest, BulkAssignCenterRequest
-
-# Age categories must match @tofa/core AGE_CATEGORIES for consistency
-ALLOWED_AGE_CATEGORIES = frozenset({"U5", "U7", "U9", "U11", "U13", "U15", "U17", "Senior"})
 
 # FastAPI OAuth2 scheme for token extraction
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
@@ -123,6 +123,7 @@ async def get_current_user(
     
     return user
 
+# redirect_slashes=False: prevents 307 redirects that drop CORS headers (→ Mixed Content behind GCP proxy)
 app = FastAPI(redirect_slashes=False)
 
 # CORS: locked-down list; extend from CORS_ORIGINS env if set
@@ -133,10 +134,14 @@ origins = [
 ]
 cors_origins_env = os.getenv("CORS_ORIGINS", "").strip()
 if cors_origins_env:
-    origins = list(origins) + [o.strip() for o in cors_origins_env.split(",") if o.strip()]
+    origins = list(origins) + [o.strip() for o in cors_origins_env.split(";") if o.strip()]
+# Regex for Cloud Run URLs (deployments can change the hash)
+# Matches https://anything.run.app and https://anything.a.run.app
+cors_origin_regex = r"^https://[\w-]+(-[\w]+)*\.(run\.app|a\.run\.app)(:\d+)?$"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
+    allow_origin_regex=cors_origin_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -160,6 +165,32 @@ def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
 
 
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    Catch unhandled exceptions (excluding HTTPException) and return JSON.
+    Ensures 500 responses always return proper JSON so CORS middleware can add headers.
+    """
+    if isinstance(exc, HTTPException):
+        raise exc  # Let FastAPI handle 4xx normally
+    import traceback
+    import logging
+    logging.getLogger("uvicorn.error").error(
+        "Unhandled exception: %s\n%s", exc, traceback.format_exc()
+    )
+    origin = request.headers.get("origin", "*")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": str(exc) if os.getenv("ENVIRONMENT") == "development" else "Internal server error",
+        },
+        headers={
+            "Access-Control-Allow-Origin": origin,
+            "Access-Control-Allow-Credentials": "true",
+        },
+    )
 
 # Proxy/HTTPS middleware - when behind Cloud Run (or similar), use X-Forwarded-Proto so redirects stay on https
 @app.middleware("http")
@@ -248,14 +279,96 @@ async def login(
 
 @app.get("/me")
 async def get_current_user_info(
+    db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Get current user information."""
-    return {
+    """Get current user information, including center_ids for coaches."""
+    from backend.models import UserCenterLink
+    result = {
         "email": current_user.email,
         "full_name": current_user.full_name,
         "role": current_user.role
     }
+    center_links = db.exec(
+        select(UserCenterLink).where(UserCenterLink.user_id == current_user.id)
+    ).all()
+    result["center_ids"] = [link.center_id for link in center_links]
+    return result
+
+
+# --- NOTIFICATION ENDPOINTS ---
+@app.get("/notifications")
+def get_notifications(
+    limit: int = 20,
+    offset: int = 0,
+    unread_only: bool = False,
+    hours: int = 48,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Fetch current user's notifications (paginated). Last 48 hours. team_lead: all; team_member/observer: only where notification.center_id is in the user's assigned centers (or null)."""
+    from backend.core.notifications import get_notifications_for_user
+    is_team_lead = current_user.role == "team_lead"
+    user_center_ids = [c.id for c in current_user.centers] if not is_team_lead else None
+    since_hours = hours if hours > 0 else None
+    notifications = get_notifications_for_user(
+        db, current_user.id,
+        limit=limit, offset=offset, unread_only=unread_only,
+        is_team_lead=is_team_lead, user_center_ids=user_center_ids,
+        since_hours=since_hours,
+    )
+    return [
+        {
+            "id": n.id,
+            "user_id": n.user_id,
+            "type": n.type,
+            "title": n.title,
+            "message": n.message,
+            "link": n.link,
+            "target_url": getattr(n, "target_url", None),
+            "is_read": n.is_read,
+            "created_at": n.created_at.isoformat() if n.created_at else None,
+            "center_id": n.center_id,
+            "priority": getattr(n, "priority", "low"),
+        }
+        for n in notifications
+    ]
+
+
+@app.get("/notifications/unread-count")
+def get_notifications_unread_count(
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Return unread notification count for the current user (role-filtered)."""
+    from backend.core.notifications import get_unread_count
+    is_team_lead = current_user.role == "team_lead"
+    user_center_ids = [c.id for c in current_user.centers] if not is_team_lead else None
+    return {"count": get_unread_count(db, current_user.id, is_team_lead=is_team_lead, user_center_ids=user_center_ids)}
+
+
+@app.put("/notifications/{notification_id}/read")
+def mark_notification_read(
+    notification_id: int,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Mark a single notification as read."""
+    from backend.core.notifications import mark_as_read
+    if not mark_as_read(db, notification_id, current_user.id):
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"status": "ok"}
+
+
+@app.put("/notifications/read-all")
+def mark_all_notifications_read(
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Mark all notifications for the current user as read."""
+    from backend.core.notifications import mark_all_as_read
+    count = mark_all_as_read(db, current_user.id)
+    return {"marked_count": count}
 
 
 # --- USER MANAGEMENT ENDPOINTS ---
@@ -277,6 +390,7 @@ def get_users(
             "id": user.id,
             "email": user.email,
             "full_name": user.full_name,
+            "phone": getattr(user, "phone", None),
             "role": user.role,
             "is_active": user.is_active,
         }
@@ -306,9 +420,10 @@ def create_user_endpoint(
             password=user_data.password,
             full_name=user_data.full_name,
             role=user_data.role,
-            center_ids=user_data.center_ids
+            center_ids=user_data.center_ids,
+            phone=user_data.phone
         )
-        return {"id": new_user.id, "email": new_user.email, "full_name": new_user.full_name, "role": new_user.role}
+        return {"id": new_user.id, "email": new_user.email, "full_name": new_user.full_name, "role": new_user.role, "phone": new_user.phone}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -329,6 +444,7 @@ def update_user_endpoint(
             db=db,
             user_id=user_id,
             full_name=user_data.full_name,
+            phone=user_data.phone,
             role=user_data.role,
             is_active=user_data.is_active,
             password=user_data.password,
@@ -338,6 +454,7 @@ def update_user_endpoint(
             "id": updated_user.id,
             "email": updated_user.email,
             "full_name": updated_user.full_name,
+            "phone": updated_user.phone,
             "role": updated_user.role,
             "is_active": updated_user.is_active
         }
@@ -389,7 +506,9 @@ def create_center_endpoint(
     display_name: str,
     meta_tag_name: str,
     city: str,
-    location: str,
+    location: str = "",
+    map_link: Optional[str] = None,
+    group_email: Optional[str] = None,
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
@@ -398,7 +517,7 @@ def create_center_endpoint(
         raise HTTPException(status_code=403, detail="Only team leads can create centers")
     
     try:
-        new_center = create_center(db, display_name, meta_tag_name, city, location)
+        new_center = create_center(db, display_name, meta_tag_name, city, location, map_link, group_email)
         return new_center
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -411,6 +530,8 @@ def update_center_endpoint(
     meta_tag_name: Optional[str] = None,
     city: Optional[str] = None,
     location: Optional[str] = None,
+    map_link: Optional[str] = None,
+    group_email: Optional[str] = None,
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
@@ -425,7 +546,9 @@ def update_center_endpoint(
             display_name=display_name,
             meta_tag_name=meta_tag_name,
             city=city,
-            location=location
+            location=location,
+            map_link=map_link,
+            group_email=group_email
         )
         return updated_center
     except ValueError as e:
@@ -499,7 +622,8 @@ async def upload_leads(
     file: UploadFile = File(...),
     column_mapping: Optional[str] = None,
     db: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    background_tasks: BackgroundTasks = None,
 ):
     import json
     import io
@@ -539,27 +663,18 @@ async def upload_leads(
         inv_map = {v: k for k, v in mapping.items()}
         df_mapped = df.rename(columns=inv_map)
         
-        # 5. Calculate Age Category from DOB if needed
-        # Check if player_age_category values are actually dates (DOBs) and convert them
-        if 'player_age_category' in df_mapped.columns:
-            from backend.core.import_validation import calculate_age_category
-            # Check if values look like dates - try to parse first non-null value
-            sample_values = df_mapped['player_age_category'].dropna().head(5)
-            if not sample_values.empty:
-                try:
-                    # Try to parse as date - if it works, values are DOBs and need conversion
-                    pd.to_datetime(sample_values.iloc[0])
-                    # Convert all DOB values to age categories
-                    df_mapped['player_age_category'] = df_mapped['player_age_category'].apply(calculate_age_category)
-                    print(f"✅ Converted DOB values to age categories")
-                except (ValueError, TypeError):
-                    # Values are already age categories, not dates
-                    pass
-
-        # 6. Call core import logic
-        # We pass 'center' because that's the key used in import_validation mapping
-        count, errors = import_leads_from_dataframe(db, df_mapped, 'center')
-        
+        # 5. Ensure date_of_birth column exists (might be mapped from dob/player_date_of_birth)
+        # 6. Call core import logic; emails sent in background (one summary per center with count > 1)
+        count, errors, summary_list = import_leads_from_dataframe(db, df_mapped, 'center')
+        if background_tasks and summary_list:
+            from backend.core.emails import send_import_summary_background
+            for s in summary_list:
+                background_tasks.add_task(
+                    send_import_summary_background,
+                    s["center_id"],
+                    s["center_name"],
+                    s["count"],
+                )
         return {
             "status": "success",
             "leads_added": count,
@@ -576,21 +691,28 @@ async def meta_webhook(
     phone: str,
     name: str,
     email: Optional[str] = None,
-    center_tag: str = None,
-    age_category: str = None,
+    center_tag: Optional[str] = None,
+    date_of_birth: Optional[str] = None,
+    age_group: Optional[str] = None,  # Legacy webhooks - converted to approximate DOB
     address: Optional[str] = None,
-    db: Session = Depends(get_session)
+    db: Session = Depends(get_session),
+    background_tasks: BackgroundTasks = None,
 ):
     """
     Webhook endpoint for Meta lead ads.
-    Creates a new lead from Meta form submission.
+    Creates a new lead from Meta form submission. Email alert is sent in background.
     """
     try:
         if not center_tag:
             center_tag = "unknown"  # Default center tag if not provided
         
-        if not age_category:
-            age_category = "Unknown"
+        from datetime import date as date_type
+        dob_parsed = None
+        if date_of_birth:
+            try:
+                dob_parsed = date_type.fromisoformat(date_of_birth)
+            except (ValueError, TypeError):
+                pass
         
         lead = create_lead_from_meta(
             db=db,
@@ -598,10 +720,29 @@ async def meta_webhook(
             name=name,
             email=email,
             center_tag=center_tag,
-            age_category=age_category,
+            date_of_birth=dob_parsed,
+            age_group=age_group,  # Fallback for legacy webhooks
             address=address
         )
-        
+        # Bell only (Low Priority) - no email for new leads
+        from backend.core.notifications import notify_center_users
+        try:
+            center = db.get(Center, lead.center_id)
+            center_name = (center.display_name or center.city or "Unknown") if center else "Unknown"
+            base_url = os.getenv("CRM_BASE_URL", "").strip().rstrip("/")
+            from urllib.parse import quote
+            link = f"{base_url}/leads?search={quote(lead.phone or '')}" if base_url else None
+            notify_center_users(
+                db, lead.center_id,
+                type="SALES_ALERT",
+                title=f"New Lead: {lead.player_name or 'Unknown'}",
+                message=f"New lead from Meta Ads at {center_name}. Phone: {lead.phone or '—'}.",
+                link=link,
+                priority="low",
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception("New lead in-app notification failed: %s", e)
         return {"status": "success", "lead_id": lead.id}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -618,7 +759,7 @@ def get_my_leads(
     search: Optional[str] = None,
     sort_by: str = "created_time",  # "created_time" or "freshness"
     next_follow_up_date: Optional[str] = None,  # Filter by follow-up date (YYYY-MM-DD)
-    filter: Optional[str] = None,  # Special filter: "at-risk"
+    filter: Optional[str] = None,  # Special filter: "at-risk", "overdue", or "new"
     loss_reason: Optional[str] = None,  # Filter by loss_reason
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
@@ -635,17 +776,22 @@ def get_my_leads(
         filter: Special filter - "at-risk" for inactive leads
     """
     at_risk_filter = filter == "at-risk" if filter else None
+    overdue_filter = filter == "overdue" if filter else None
+    nudge_failures_filter = filter == "nudge_failures" if filter else None
+    status_arg = status if status else ("New" if filter == "new" else None)
     leads, total = get_leads_for_user(
         db, 
         current_user, 
         limit=limit, 
         offset=offset,
-        status_filter=status,
+        status_filter=status_arg,
         search=search,
         sort_by=sort_by,
         loss_reason_filter=loss_reason,
         next_follow_up_date_filter=next_follow_up_date,
-        at_risk_filter=at_risk_filter
+        at_risk_filter=at_risk_filter,
+        overdue_filter=overdue_filter,
+        nudge_failures_filter=nudge_failures_filter,
     )
     
     # Mask sensitive fields for coaches
@@ -667,7 +813,7 @@ def update_lead_endpoint(
     status: str,
     next_date: Optional[str] = None,
     comment: Optional[str] = None,
-    age_category: Optional[str] = None,
+    date_of_birth: Optional[str] = None,  # Legacy - converted to approximate DOB
     trial_batch_id: Optional[int] = None,
     permanent_batch_id: Optional[int] = None,
     student_batch_ids: Optional[str] = None,  # Comma-separated list of batch IDs
@@ -676,6 +822,8 @@ def update_lead_endpoint(
     subscription_end_date: Optional[str] = None,
     payment_proof_url: Optional[str] = None,  # URL to payment proof image
     call_confirmation_note: Optional[str] = None,  # Note confirming call with parent
+    loss_reason: Optional[str] = None,  # Off-ramp reason (e.g. Expensive fee, Other)
+    loss_reason_notes: Optional[str] = None,  # Details when reason is 'Other'
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
@@ -712,12 +860,14 @@ def update_lead_endpoint(
             next_date=next_date,
             comment=comment,
             user_id=current_user.id,
-            player_age_category=age_category,  # Map age_category parameter to player_age_category
+            date_of_birth=date_type.fromisoformat(date_of_birth) if (date_of_birth and isinstance(date_of_birth, str)) else None,
             trial_batch_id=trial_batch_id,
             permanent_batch_id=permanent_batch_id,
             student_batch_ids=student_batch_ids_list,
             payment_proof_url=payment_proof_url,
-            call_confirmation_note=call_confirmation_note
+            call_confirmation_note=call_confirmation_note,
+            loss_reason=loss_reason,
+            loss_reason_notes=loss_reason_notes
         )
         
         # Update subscription fields if provided
@@ -758,6 +908,27 @@ def update_lead_endpoint(
             db.commit()
             db.refresh(lead)
         
+        # Bell only (Low Priority): Trial Scheduled
+        if status == "Trial Scheduled":
+            try:
+                from backend.core.leads import get_lead_by_id
+                from backend.core.notifications import notify_center_users
+                lead_obj = get_lead_by_id(db, lead_id)
+                if lead_obj and lead_obj.center_id:
+                    import os
+                    base_url = os.getenv("CRM_BASE_URL", "").strip().rstrip("/")
+                    from urllib.parse import quote
+                    link = f"{base_url}/leads?search={quote(lead_obj.phone or '')}" if base_url and lead_obj.phone else None
+                    notify_center_users(
+                        db, lead_obj.center_id,
+                        type="SALES_ALERT",
+                        title=f"Trial Scheduled: {lead_obj.player_name or 'Unknown'}",
+                        message=f"A trial has been scheduled for this lead.",
+                        link=link,
+                        priority="low",
+                    )
+            except Exception as _:
+                pass
         # Return updated lead data
         from backend.core.leads import get_lead_by_id
         updated_lead = get_lead_by_id(db, lead_id)
@@ -861,6 +1032,149 @@ def convert_lead_to_student_endpoint(
         raise HTTPException(status_code=400, detail=error_message)
 
 
+@app.post("/leads/{lead_id}/send-enrollment-link")
+def send_enrollment_link_endpoint(
+    lead_id: int,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Send enrollment link to lead (sets enrollment_link_sent_at, link_expires_at). Center head or team lead."""
+    from backend.core.leads import get_lead_by_id
+    from datetime import datetime, timedelta
+
+    lead = get_lead_by_id(db, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if lead.status != "Trial Attended":
+        raise HTTPException(status_code=400, detail="Lead must be in Trial Attended status")
+
+    user_center_ids = [c.id for c in current_user.centers]
+    if current_user.role != "team_lead" and lead.center_id not in user_center_ids:
+        raise HTTPException(status_code=403, detail="Not authorized for this lead")
+
+    now = datetime.utcnow()
+    expires = now + timedelta(days=7)
+    lead.enrollment_link_sent_at = now
+    lead.link_expires_at = expires
+    lead.last_updated = now
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+    base_url = os.getenv("NEXT_PUBLIC_APP_URL", os.getenv("APP_URL", "https://example.com")).rstrip("/")
+    token = lead.public_token
+    link = f"{base_url}/join/{token}" if token else ""
+    return {"message": "Enrollment link sent", "link": link, "expires_at": expires.isoformat()}
+
+
+@app.post("/leads/{lead_id}/verify-and-enroll")
+def verify_and_enroll_lead_endpoint(
+    lead_id: int,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Verify payment and enroll student (team_lead only). Reads pending_subscription_data from lead.
+    Converts lead to student and sends welcome email.
+    """
+    from backend.core.leads import get_lead_by_id
+    from backend.core.students import convert_lead_to_student
+    from backend.core.emails import send_welcome_email
+    from backend.models import Student
+    from backend.schemas.students import StudentRead
+    from sqlalchemy.orm import selectinload
+
+    if current_user.role != "team_lead":
+        raise HTTPException(status_code=403, detail="Only Team Lead can verify and enroll")
+
+    lead = get_lead_by_id(db, lead_id)
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    if lead.status != "Payment Pending Verification":
+        raise HTTPException(status_code=400, detail="Lead must be in Payment Pending Verification status")
+    pending = getattr(lead, "pending_subscription_data", None)
+    if not pending or not isinstance(pending, dict):
+        raise HTTPException(status_code=400, detail="No pending subscription data found")
+
+    subscription_plan = pending.get("subscription_plan") or "Monthly"
+    start_date_str = pending.get("start_date")
+    batch_id = pending.get("batch_id")
+    utr_number = pending.get("utr_number")
+    payment_proof_url = pending.get("payment_proof_url")
+    kit_size = pending.get("kit_size")
+    medical_info = pending.get("medical_info")
+    secondary_contact = pending.get("secondary_contact")
+
+    if not start_date_str:
+        raise HTTPException(status_code=400, detail="Missing start_date in pending data")
+    from datetime import date as date_type, timedelta
+    try:
+        start_date = date_type.fromisoformat(start_date_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid start_date in pending data")
+
+    student_batch_ids = [batch_id] if batch_id else []
+    if not student_batch_ids and getattr(lead, "preferred_batch_id", None):
+        student_batch_ids = [lead.preferred_batch_id]
+
+    months_map = {"Monthly": 1, "Quarterly": 3, "3 Months": 3, "6 Months": 6, "Yearly": 12}
+    months = months_map.get(subscription_plan, 1)
+    end_date = start_date + timedelta(days=months * 31)
+    end_date_str = end_date.isoformat()
+
+    student_data = {
+        "subscription_plan": subscription_plan,
+        "subscription_start_date": start_date,
+        "subscription_end_date": end_date,
+        "utr_number": utr_number,
+        "payment_proof_url": payment_proof_url,
+        "is_payment_verified": True,
+        "kit_size": kit_size,
+        "medical_info": medical_info,
+        "secondary_contact": secondary_contact,
+        "student_batch_ids": student_batch_ids,
+        "center_id": lead.center_id,
+    }
+    try:
+        student = convert_lead_to_student(
+            db=db, lead_id=lead_id, student_data=student_data, user_id=current_user.id
+        )
+        lead.pending_subscription_data = None
+        db.add(lead)
+        db.commit()
+        db.refresh(lead)
+        try:
+            send_welcome_email(db, student.id)
+        except Exception:
+            pass  # Non-blocking
+        # Success signal: Enrollment Finalized notification (high priority / gold dot)
+        try:
+            from backend.core.notifications import notify_center_users
+            from urllib.parse import quote
+            from backend.models import Batch
+            player_name = lead.player_name or "Player"
+            batch_name = "—"
+            if student_batch_ids:
+                batch = db.get(Batch, student_batch_ids[0])
+                batch_name = batch.name if batch else "—"
+            notify_center_users(
+                db, student.center_id,
+                type="SALES_ALERT",
+                title=f"🎉 Enrollment Finalized: {player_name}",
+                message=f"Payment has been verified. {player_name} is now an active student in the {batch_name} batch.",
+                target_url=f"/students?search={quote(player_name)}",
+                priority="high",
+            )
+        except Exception:
+            pass
+        stmt = select(Student).where(Student.id == student.id).options(
+            selectinload(Student.lead), selectinload(Student.batches)
+        )
+        student_with_relations = db.exec(stmt).first()
+        return StudentRead.from_student(student_with_relations)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.get("/students")
 def get_students_endpoint(
     center_id: Optional[int] = None,
@@ -868,12 +1182,29 @@ def get_students_endpoint(
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Get all students from the Student table, including player name from linked Lead record."""
+    """Get all students. Team lead sees all; team_member/observer see only their assigned centers; coach has no access."""
     from backend.schemas.students import StudentRead
     from sqlalchemy.orm import selectinload
-    
-    # Get students with lead relationship loaded
-    students = get_all_students(db, center_id=center_id, is_active=is_active)
+
+    # Role-based filtering: team_lead = all; team_member/observer = their assigned centers only
+    # Coach: allowed (e.g. for Check-In) but gets masked data via mask_student_for_coach below
+    center_ids_arg = None
+    if current_user.role in ("team_member", "observer"):
+        user_center_ids = [c.id for c in current_user.centers]
+        if not user_center_ids:
+            students = []
+        else:
+            center_ids_arg = user_center_ids
+
+    if center_ids_arg is not None and len(center_ids_arg) == 0:
+        students = []
+    else:
+        students = get_all_students(
+            db,
+            center_id=center_id if current_user.role == "team_lead" else None,
+            center_ids=center_ids_arg,
+            is_active=is_active
+        )
     
     # Eagerly load lead relationships
     from backend.models import Student
@@ -900,6 +1231,96 @@ def get_students_endpoint(
             result.append(student_data.model_dump())
     
     return result
+
+
+@app.get("/students/payment-unverified")
+def get_payment_unverified_students_endpoint(
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """List students with UTR but payment not yet verified (team_lead only). For Financial Audit card."""
+    if current_user.role != "team_lead":
+        raise HTTPException(status_code=403, detail="Only Team Lead can view payment audit")
+    from sqlalchemy.orm import selectinload
+    from sqlalchemy import and_
+    stmt = (
+        select(Student)
+        .where(and_(Student.utr_number.isnot(None), Student.utr_number != "", Student.is_payment_verified == False))
+        .options(selectinload(Student.lead))
+    )
+    students = list(db.exec(stmt).all())
+    return [
+        {
+            "id": s.id,
+            "lead_id": s.lead_id,
+            "player_name": s.lead.player_name if s.lead else "—",
+            "utr_number": s.utr_number,
+            "payment_proof_url": s.payment_proof_url,
+            "date": s.created_at.isoformat() if s.created_at else None,
+        }
+        for s in students
+    ]
+
+
+def _do_verify_payment(db: Session, student: Student) -> None:
+    """Set is_payment_verified=True, is_active=True, and clear renewal/grace flags."""
+    student.is_payment_verified = True
+    student.renewal_intent = False
+    student.in_grace_period = False
+    student.grace_nudge_count = 0
+    student.is_active = True
+    db.add(student)
+    db.commit()
+    db.refresh(student)
+
+
+@app.patch("/students/{student_id}/verify-payment")
+@app.post("/students/{student_id}/verify-payment")
+def verify_student_payment_endpoint(
+    student_id: int,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Mark student payment as verified (team_lead only). Resets renewal intent flags. Creates audit log."""
+    if current_user.role != "team_lead":
+        raise HTTPException(status_code=403, detail="Only Team Lead can verify payment")
+    student = db.get(Student, student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    _do_verify_payment(db, student)
+    from backend.core.audit import log_lead_activity
+    log_lead_activity(
+        db, student.lead_id, current_user.id,
+        action_type="payment_verified",
+        description="Payment verified by Team Lead.",
+        new_value="verified",
+    )
+    return {"status": "ok", "is_payment_verified": True}
+
+
+@app.get("/students/by-lead/{lead_id}")
+def get_student_by_lead_endpoint(
+    lead_id: int,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """Get the student record for a lead (e.g. after join, for welcome email)."""
+    from backend.schemas.students import StudentRead
+    from sqlalchemy.orm import selectinload
+
+    student = get_student_by_lead_id(db, lead_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found for this lead")
+    if current_user.role != "team_lead":
+        user_center_ids = [c.id for c in current_user.centers]
+        if student.center_id not in user_center_ids:
+            raise HTTPException(status_code=403, detail="Not authorized to view this student")
+    stmt = select(Student).where(Student.id == student.id).options(
+        selectinload(Student.lead),
+        selectinload(Student.batches),
+    )
+    student = db.exec(stmt).first()
+    return StudentRead.from_student(student).model_dump()
 
 
 @app.put("/students/{student_id}")
@@ -1052,6 +1473,85 @@ def update_renewal_intent_endpoint(
     }
 
 
+class RenewConfirmSubmit(BaseModel):
+    """Full renewal payload from public renewal form."""
+    subscription_plan: str  # e.g. 'Monthly', '3 Months', '6 Months', 'Yearly'
+    subscription_start_date: str  # YYYY-MM-DD
+    utr_number: Optional[str] = None
+    payment_proof_url: Optional[str] = None
+    kit_size: Optional[str] = None
+    medical_info: Optional[str] = None
+    secondary_contact: Optional[str] = None
+
+
+@app.post("/students/renew-confirm/{public_token}")
+def renew_confirm_public(
+    public_token: str,
+    body: RenewConfirmSubmit,
+    db: Session = Depends(get_session),
+):
+    """
+    Public endpoint: parent submitted renewal with plan, dates, UTR/screenshot.
+    Updates student record, sets renewal_intent=True, is_payment_verified=False.
+    Audit: 'Parent submitted renewal transaction via public portal. Pending verification.'
+    """
+    from datetime import date as date_type, timedelta
+    from backend.core.audit import log_lead_activity
+
+    lead = db.exec(select(Lead).where(Lead.public_token == public_token)).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Invalid renewal link")
+    student = db.exec(
+        select(Student).where(and_(Student.lead_id == lead.id, Student.is_active == True))
+    ).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found for this link")
+
+    has_utr = False
+    utr = ""
+    if body.utr_number:
+        utr = (body.utr_number or "").strip().replace(" ", "")
+        has_utr = len(utr) == 12 and utr.isdigit()
+    has_screenshot = bool(body.payment_proof_url and body.payment_proof_url.strip())
+    if not has_utr and not has_screenshot:
+        raise HTTPException(status_code=400, detail="Provide at least one: UTR (12 digits) or payment screenshot")
+    if utr and (len(utr) != 12 or not utr.isdigit()):
+        raise HTTPException(status_code=400, detail="UTR must be exactly 12 digits")
+
+    try:
+        start_date = date_type.fromisoformat(body.subscription_start_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid start_date (use YYYY-MM-DD)")
+
+    months_map = {"Monthly": 1, "Quarterly": 3, "3 Months": 3, "6 Months": 6, "Yearly": 12}
+    months = months_map.get(body.subscription_plan, 1)
+    end_date = start_date + timedelta(days=months * 31)
+
+    student.subscription_plan = body.subscription_plan
+    student.subscription_start_date = start_date
+    student.subscription_end_date = end_date
+    student.utr_number = utr if has_utr else (student.utr_number or None)
+    student.payment_proof_url = body.payment_proof_url.strip() if has_screenshot else None
+    student.is_payment_verified = False
+    student.renewal_intent = True
+    if body.kit_size is not None:
+        student.kit_size = body.kit_size or None
+    if body.medical_info is not None:
+        student.medical_info = body.medical_info or None
+    if body.secondary_contact is not None:
+        student.secondary_contact = body.secondary_contact or None
+    db.add(student)
+    db.commit()
+    db.refresh(student)
+
+    log_lead_activity(
+        db, lead.id, None,
+        action_type="renewal_submitted",
+        description="Parent submitted renewal transaction via public portal. Pending verification.",
+    )
+    return {"message": "Renewal submitted. We will verify your payment and get in touch."}
+
+
 @app.post("/students/{student_id}/grace-nudge")
 def send_grace_nudge_endpoint(
     student_id: int,
@@ -1108,6 +1608,33 @@ def send_grace_nudge_endpoint(
     }
 
 
+@app.post("/students/{student_id}/send-welcome-email")
+def send_welcome_email_endpoint(
+    student_id: int,
+    db: Session = Depends(get_session),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Send a welcome email to the student's parent (lead email).
+    Uses placeholder email sender; configure EMAIL_API_KEY (Resend/SendGrid) for real sending.
+    """
+    from backend.core.emails import send_welcome_email
+    from backend.models import Student
+
+    student = db.get(Student, student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    if current_user.role != "team_lead":
+        user_center_ids = [c.id for c in current_user.centers]
+        if student.center_id not in user_center_ids:
+            raise HTTPException(status_code=403, detail="Not authorized for this student")
+    try:
+        result = send_welcome_email(db, student_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"message": "Welcome email sent", "to": result["to"]}
+
+
 @app.get("/students/by-token/{public_token}")
 def get_student_by_token_endpoint(
     public_token: str,
@@ -1143,15 +1670,16 @@ def get_student_by_token_endpoint(
     return StudentRead.from_student(student)
 
 
-@app.put("/leads/{lead_id}/age-category")
-def update_age_category_endpoint(
+@app.put("/leads/{lead_id}/date-of-birth")
+def update_date_of_birth_endpoint(
     lead_id: int,
-    age_category: str,
+    date_of_birth: Optional[str] = Body(None),
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    """Update a lead's age category."""
+    """Update a lead's date of birth. Age is derived from this in the UI."""
     from backend.core.leads import get_lead_by_id
+    from datetime import date as date_type
     
     # Verify user has access to this lead
     lead = get_lead_by_id(db, lead_id)
@@ -1164,15 +1692,22 @@ def update_age_category_endpoint(
         if lead.center_id not in user_center_ids:
             raise HTTPException(status_code=403, detail="Not authorized to update this lead")
     
+    dob_parsed = None
+    if date_of_birth:
+        try:
+            dob_parsed = date_type.fromisoformat(date_of_birth)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="date_of_birth must be YYYY-MM-DD")
+    
     try:
         updated_lead = update_lead(
             db=db,
             lead_id=lead_id,
             status=lead.status,  # Keep current status
-            player_age_category=age_category,
+            date_of_birth=dob_parsed,
             user_id=current_user.id
         )
-        return {"status": "updated", "age_category": updated_lead.player_age_category}
+        return {"status": "updated", "date_of_birth": updated_lead.date_of_birth.isoformat() if updated_lead.date_of_birth else None}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -1349,7 +1884,23 @@ def bulk_assign_center(
         new_center_id=request.center_id,
         user_id=current_user.id
     )
-    
+    # Bell only (Low Priority): Lead(s) assigned to center
+    if result.get("updated_count", 0) > 0:
+        try:
+            from backend.core.notifications import notify_center_users
+            center = db.get(Center, request.center_id)
+            center_name = (center.display_name or center.city or "Unknown") if center else "Unknown"
+            count = result["updated_count"]
+            notify_center_users(
+                db, request.center_id,
+                type="OPS_ALERT",
+                title=f"{count} lead(s) assigned to your center",
+                message=f"{count} lead(s) have been assigned to {center_name}. Check Leads to follow up.",
+                link="/leads",
+                priority="low",
+            )
+        except Exception as _:
+            pass
     return result
 
 
@@ -1460,11 +2011,10 @@ def get_conversion_rates(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get conversion rates between status transitions.
-    Returns conversion rates for each status transition.
+    Get conversion rates and business funnel (5-min cached).
+    Returns legacy conversion_rates and new funnel (Engagement, Commitment, Success).
     """
-    conversion_rates = calculate_conversion_rates(db)
-    return {"conversion_rates": conversion_rates}
+    return get_conversion_rates_cached(db)
 
 
 @app.get("/analytics/time-to-contact")
@@ -1473,9 +2023,9 @@ def get_time_to_contact(
     current_user: User = Depends(get_current_user)
 ):
     """
-    Get average time (in hours) from lead creation to first contact (status change).
+    Get average time (in hours) from lead creation to first contact (status change) (5-min cached).
     """
-    avg_hours = calculate_average_time_to_contact(db)
+    avg_hours = calculate_average_time_to_contact_cached(db)
     if avg_hours is None:
         return {"average_hours": None, "message": "No data available"}
     return {"average_hours": avg_hours}
@@ -1624,22 +2174,34 @@ async def create_staging_lead_endpoint(
     player_name: str = Body(...),
     phone: str = Body(...),
     email: Optional[str] = Body(None),
+    age: Optional[int] = Body(None),
+    date_of_birth: Optional[str] = Body(None),
     center_id: int = Body(...),
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
     """
-    Create a staging lead (coaches only).
+    Create a staging lead (coaches / team members).
     Includes duplicate check against both Lead and LeadStaging tables.
     
     Body Parameters:
         player_name: Player's name
         phone: Phone number
         email: Optional email address
+        age: Optional numeric age
+        date_of_birth: Optional date (YYYY-MM-DD)
         center_id: Center ID
     """
-    if current_user.role != "coach":
-        raise HTTPException(status_code=403, detail="Only coaches can create staging leads")
+    if current_user.role not in ("coach", "team_lead", "team_member"):
+        raise HTTPException(status_code=403, detail="Only coaches and team members can create staging leads")
+    
+    from datetime import date as date_type
+    dob_parsed = None
+    if date_of_birth:
+        try:
+            dob_parsed = date_type.fromisoformat(date_of_birth)
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=400, detail="date_of_birth must be YYYY-MM-DD")
     
     try:
         staging_lead = create_staging_lead(
@@ -1647,9 +2209,26 @@ async def create_staging_lead_endpoint(
             player_name=player_name,
             phone=phone,
             email=email,
+            age=age,
+            date_of_birth=dob_parsed,
             center_id=center_id,
             created_by_id=current_user.id
         )
+        # Notify center users: New Walk-In Lead (Field Capture)
+        try:
+            from backend.core.notifications import notify_center_users
+            center = db.get(Center, center_id)
+            center_name = (center.display_name or center.city or "Unknown") if center else "Unknown"
+            notify_center_users(
+                db, center_id,
+                type="SALES_ALERT",
+                title=f"New Walk-In Lead: {player_name} at {center_name}",
+                message=f"Field capture submitted for {player_name} at {center_name}.",
+                target_url="/staging",
+                priority="high",
+            )
+        except Exception as _:
+            pass
         return staging_lead
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1678,30 +2257,23 @@ async def get_staging_leads_endpoint(
 @app.post("/staging/leads/{staging_id}/promote")
 async def promote_staging_lead_endpoint(
     staging_id: int,
-    player_age_category: str = Body(...),
+    date_of_birth: Optional[str] = Body(None),
     email: Optional[str] = Body(None),
     address: Optional[str] = Body(None),
-    date_of_birth: Optional[str] = Body(None),
     db: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
     """
     Promote a staging lead to a full Lead record (Team Leads and Team Members only).
-    Requires age_category to be provided.
+    Lead is fast-tracked to status 'Trial Attended' with next_followup_date 24h from now (Hot: Ready to Join).
     
     Body Parameters:
-        player_age_category: Required age category (e.g., 'U9', 'U11')
+        date_of_birth: Optional date of birth (YYYY-MM-DD) - if not provided, derived from staging.age
         email: Optional email address (overrides staging email if provided)
         address: Optional address
-        date_of_birth: Optional date of birth (YYYY-MM-DD)
     """
     if current_user.role not in ["team_lead", "team_member"]:
         raise HTTPException(status_code=403, detail="Only Team Leads and Team Members can promote staging leads")
-    if player_age_category not in ALLOWED_AGE_CATEGORIES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid age category. Allowed: {', '.join(sorted(ALLOWED_AGE_CATEGORIES))}",
-        )
     try:
         from datetime import date as date_type
         dob_parsed = None
@@ -1713,52 +2285,56 @@ async def promote_staging_lead_endpoint(
         lead = promote_staging_lead(
             db=db,
             staging_id=staging_id,
-            player_age_category=player_age_category,
+            date_of_birth=dob_parsed,
             email=email,
             address=address,
-            date_of_birth=dob_parsed,
-            user_id=current_user.id
+            user_id=current_user.id,
         )
-        return lead
+        return {
+            "id": lead.id,
+            "player_name": lead.player_name,
+            "phone": lead.phone,
+            "status": lead.status,
+            "center_id": lead.center_id,
+        }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-# --- DIRECT LEAD CREATION ENDPOINT (Team Leads only) ---
+# --- DIRECT LEAD CREATION ENDPOINT (Team Leads and Team Members) ---
 @app.post("/leads")
 async def create_lead_endpoint(
     player_name: str = Body(...),
-    player_age_category: str = Body(...),
     phone: str = Body(...),
     email: Optional[str] = Body(None),
     address: Optional[str] = Body(None),
     date_of_birth: Optional[str] = Body(None),
     center_id: int = Body(...),
-    status: str = Body("New"),
     db: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    background_tasks: BackgroundTasks = None,
 ):
     """
-    Create a full lead record directly (Team Leads only).
-    For manual entry of complete lead information.
+    Create a full lead record directly (Team Leads and Team Members).
+    Team members can only create leads in their assigned centers.
     
     Body Parameters:
         player_name: Player's name
-        player_age_category: Age category (e.g., 'U9', 'U11')
         phone: Phone number
         email: Optional email address
         address: Optional address
-        date_of_birth: Optional date of birth (YYYY-MM-DD)
+        date_of_birth: Optional date of birth (YYYY-MM-DD) - age derived from this in UI
         center_id: Center ID
-        status: Lead status (default: 'New')
+
+    Status is always set to "New" for manually created leads.
     """
-    if current_user.role != "team_lead":
-        raise HTTPException(status_code=403, detail="Only Team Leads can create leads directly")
-    if player_age_category not in ALLOWED_AGE_CATEGORIES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid age category. Allowed: {', '.join(sorted(ALLOWED_AGE_CATEGORIES))}",
-        )
+    if current_user.role not in ("team_lead", "team_member"):
+        raise HTTPException(status_code=403, detail="Only Team Leads and Team Members can create leads")
+    # Team members can only create leads in their assigned centers
+    if current_user.role == "team_member":
+        user_center_ids = [c.id for c in current_user.centers]
+        if center_id not in user_center_ids:
+            raise HTTPException(status_code=403, detail="You can only create leads in your assigned centers")
     # Check for duplicates
     if check_duplicate_lead(db, player_name, phone):
         raise HTTPException(status_code=400, detail="A lead with this name and phone number already exists")
@@ -1782,17 +2358,18 @@ async def create_lead_endpoint(
                 raise HTTPException(status_code=400, detail="date_of_birth must be YYYY-MM-DD")
         
         # Create lead
-        initial_followup = datetime.utcnow() + timedelta(hours=24)
+        now = datetime.utcnow()
+        initial_followup = now + timedelta(hours=24)
         new_lead = Lead(
-            created_time=datetime.utcnow(),
+            created_time=now,
+            last_updated=now,  # Same as created_time for new leads
             player_name=player_name,
-            player_age_category=player_age_category,
             phone=phone,
             email=email,
             address=address,
             date_of_birth=dob_parsed,
             center_id=center_id,
-            status=status,
+            status="New",  # Manual adds always start as New
             public_token=str(uuid.uuid4()),
             next_followup_date=initial_followup
         )
@@ -1800,7 +2377,25 @@ async def create_lead_endpoint(
         db.add(new_lead)
         db.commit()
         db.refresh(new_lead)
-        
+        # Bell only (Low Priority) - no email for new leads
+        try:
+            from backend.core.notifications import notify_center_users
+            import os
+            base_url = os.getenv("CRM_BASE_URL", "").strip().rstrip("/")
+            from urllib.parse import quote
+            link = f"{base_url}/leads?search={quote(new_lead.phone or '')}" if base_url else None
+            center_name = center.display_name or center.city or "Unknown"
+            notify_center_users(
+                db, new_lead.center_id,
+                type="SALES_ALERT",
+                title=f"New Lead: {new_lead.player_name or 'Unknown'}",
+                message=f"New lead added manually at {center_name}. Phone: {new_lead.phone or '—'}.",
+                link=link,
+                priority="low",
+            )
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception("New lead in-app notification failed: %s", e)
         return new_lead
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -2046,7 +2641,8 @@ def get_batches_endpoint(
             "id": batch.id,
             "name": batch.name,
             "center_id": batch.center_id,
-            "age_category": batch.age_category,
+            "min_age": batch.min_age,
+            "max_age": batch.max_age,
             "max_capacity": batch.max_capacity,
             "is_mon": batch.is_mon,
             "is_tue": batch.is_tue,
@@ -2076,7 +2672,7 @@ def get_potential_reactivations_endpoint(
     """
     Get potential leads to re-activate for a new batch.
     
-    Returns leads with matching center and age category that are in Nurture, On Break,
+    Returns leads with matching center and age group that are in Nurture, On Break,
     or Dead with 'Timing Mismatch' reason, and do_not_contact is False.
     """
     if current_user.role not in ["team_lead", "team_member"]:
@@ -2118,7 +2714,8 @@ def send_nudge_endpoint(
 def create_batch_endpoint(
     name: str,
     center_id: int,
-    age_category: str,
+    min_age: int = 0,
+    max_age: int = 99,
     max_capacity: int = 20,
     is_mon: bool = False,
     is_tue: bool = False,
@@ -2167,11 +2764,14 @@ def create_batch_endpoint(
             raise HTTPException(status_code=400, detail=f"Invalid start_date format: {start_date}. Use YYYY-MM-DD")
     
     try:
+        if max_age < min_age:
+            raise HTTPException(status_code=400, detail="max_age must be >= min_age")
         new_batch = create_batch(
             db=db,
             name=name,
             center_id=center_id,
-            age_category=age_category,
+            min_age=min_age,
+            max_age=max_age,
             max_capacity=max_capacity,
             is_mon=is_mon,
             is_tue=is_tue,
@@ -2238,7 +2838,8 @@ def update_batch_endpoint(
     batch_id: int,
     name: Optional[str] = None,
     center_id: Optional[int] = None,
-    age_category: Optional[str] = None,
+    min_age: Optional[int] = None,
+    max_age: Optional[int] = None,
     max_capacity: Optional[int] = None,
     is_mon: Optional[bool] = None,
     is_tue: Optional[bool] = None,
@@ -2284,12 +2885,15 @@ def update_batch_endpoint(
             raise HTTPException(status_code=400, detail=f"Invalid start_date format: {start_date}. Use YYYY-MM-DD")
     
     try:
+        if min_age is not None and max_age is not None and max_age < min_age:
+            raise HTTPException(status_code=400, detail="max_age must be >= min_age")
         updated_batch = update_batch(
             db=db,
             batch_id=batch_id,
             name=name,
             center_id=center_id,
-            age_category=age_category,
+            min_age=min_age,
+            max_age=max_age,
             max_capacity=max_capacity,
             is_mon=is_mon,
             is_tue=is_tue,
@@ -2347,153 +2951,121 @@ def get_my_batches_endpoint(
 
 
 # ==========================================
-# APPROVALS ENDPOINTS
+# APPROVALS ENDPOINTS (Universal Request System)
 # ==========================================
 
-@app.post("/approvals/request")
-def create_status_change_request_endpoint(
-    lead_id: int,
-    current_status: str,
-    requested_status: str,
-    reason: str,
+@app.post("/approvals/create")
+def create_approval_request_endpoint(
+    body: dict,
     db: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    """Submit a new status change request (regular users only)."""
+    """Submit a universal approval request (team members only). Body: request_type, reason, current_value?, requested_value?, lead_id?, student_id?."""
+    if current_user.role not in ("team_lead", "team_member"):
+        raise HTTPException(status_code=403, detail="Access denied")
     try:
-        request = create_request(
+        req = create_request(
             db=db,
-            lead_id=lead_id,
             requested_by_id=current_user.id,
-            current_status=current_status,
-            requested_status=requested_status,
-            reason=reason
+            request_type=body.get("request_type", ""),
+            reason=body.get("reason", ""),
+            current_value=body.get("current_value", ""),
+            requested_value=body.get("requested_value", ""),
+            lead_id=body.get("lead_id"),
+            student_id=body.get("student_id"),
         )
-        return {
-            "status": "success",
-            "message": "Request submitted for approval",
-            "request_id": request.id
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.post("/approvals/request-age-category")
-def create_age_category_request_endpoint(
-    lead_id: int,
-    requested_category: str,
-    reason: Optional[str] = None,
-    db: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user)
-):
-    """Submit an age category change request (team members only)."""
-    try:
-        req = create_age_category_request(
-            db=db,
-            lead_id=lead_id,
-            requested_by_id=current_user.id,
-            requested_category=requested_category,
-            reason=reason,
-        )
-        return {"status": "success", "message": "Age category change request submitted for approval", "request_id": req.id}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@app.post("/approvals/age-category/{request_id}/resolve")
-def resolve_age_category_request_endpoint(
-    request_id: int,
-    approved: bool,
-    resolution_note: Optional[str] = None,
-    db: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user)
-):
-    """Approve or reject an age category change request (team leads only)."""
-    if current_user.role != "team_lead":
-        raise HTTPException(status_code=403, detail="Only team leads can resolve age category requests")
-    try:
-        req = resolve_age_category_request(db=db, request_id=request_id, resolved_by_id=current_user.id, approved=approved, resolution_note=resolution_note)
-        return {"status": "success", "message": f"Request {'approved' if approved else 'rejected'}", "request": {"id": req.id, "request_status": req.request_status}}
+        # Internal notification: Approval Required (status reversal) -> admin (center_id=None uses admin fallback)
+        if body.get("request_type") == "STATUS_REVERSAL":
+            from backend.core.emails import send_internal_notification
+            send_internal_notification(
+                db,
+                None,
+                "Action Required: Approval Needed",
+                "A Team Member has requested a status reversal. Please review and resolve the approval request.",
+            )
+        return {"status": "success", "message": "Request submitted for approval", "request_id": req.id}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/approvals/pending")
-def get_pending_requests_endpoint(
+def get_pending_approval_requests_endpoint(
     db: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    """Get all pending status change and age category change requests (team leads only)."""
-    if current_user.role != "team_lead":
-        raise HTTPException(status_code=403, detail="Only team leads can view pending requests")
-    
+    """Get pending approval requests. Team leads see all; team members see only their own."""
+    if current_user.role not in ("team_lead", "team_member"):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     requests = get_pending_requests(db)
-    age_cat_requests = get_pending_age_category_requests(db)
-    formatted_requests = []
+    formatted = []
     for req in requests:
-        lead = db.get(Lead, req.lead_id)
+        lead = db.get(Lead, req.lead_id) if req.lead_id else None
+        student = db.get(Student, req.student_id) if req.student_id else None
+        lead_for_name = lead or (db.get(Lead, student.lead_id) if student else None)
         requester = db.get(User, req.requested_by_id)
-        formatted_requests.append({
+
+        formatted.append({
             "id": req.id,
-            "type": "status",
+            "request_type": req.request_type,
             "lead_id": req.lead_id,
-            "lead_name": lead.player_name if lead else "Unknown",
+            "student_id": req.student_id,
+            "lead_name": lead_for_name.player_name if lead_for_name else "Unknown",
             "requested_by_id": req.requested_by_id,
             "requested_by_name": requester.full_name if requester else "Unknown",
-            "current_status": req.current_status,
-            "requested_status": req.requested_status,
+            "current_value": req.current_value,
+            "requested_value": req.requested_value,
             "reason": req.reason,
-            "request_status": req.request_status,
+            "status": req.status,
             "created_at": req.created_at.isoformat() if req.created_at else None,
         })
-    for req in age_cat_requests:
-        lead = db.get(Lead, req.lead_id)
-        requester = db.get(User, req.requested_by_id)
-        formatted_requests.append({
-            "id": req.id,
-            "type": "age_category",
-            "lead_id": req.lead_id,
-            "lead_name": lead.player_name if lead else "Unknown",
-            "requested_by_id": req.requested_by_id,
-            "requested_by_name": requester.full_name if requester else "Unknown",
-            "current_status": req.current_category,
-            "requested_status": req.requested_category,
-            "reason": req.reason,
-            "request_status": req.request_status,
-            "created_at": req.created_at.isoformat() if req.created_at else None,
-        })
-    formatted_requests.sort(key=lambda x: x.get("created_at") or "", reverse=True)
-    return {"requests": formatted_requests, "count": len(formatted_requests)}
+
+    if current_user.role == "team_member":
+        formatted = [r for r in formatted if r["requested_by_id"] == current_user.id]
+    formatted.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return {"requests": formatted, "count": len(formatted)}
 
 
 @app.post("/approvals/{request_id}/resolve")
-def resolve_request_endpoint(
+def resolve_approval_request_endpoint(
     request_id: int,
     approved: bool,
     resolution_note: Optional[str] = None,
     db: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    """Approve or reject a status change request (team leads only)."""
+    """Approve or reject any approval request (team leads only)."""
     if current_user.role != "team_lead":
         raise HTTPException(status_code=403, detail="Only team leads can resolve requests")
-    
     try:
-        request = resolve_request(
+        req = resolve_request(
             db=db,
             request_id=request_id,
             resolved_by_id=current_user.id,
             approved=approved,
-            resolution_note=resolution_note
+            resolution_note=resolution_note,
         )
+        # Notify the requester: Approval Resolution Alert
+        try:
+            from backend.core.notifications import send_notification
+            from urllib.parse import quote
+            lead = db.get(Lead, req.lead_id) if req.lead_id else None
+            player_name = lead.player_name if lead else "Unknown"
+            status_text = "Approved" if approved else "Rejected"
+            send_notification(
+                db, req.requested_by_id,
+                type="GOVERNANCE_ALERT",
+                title=f"Request {status_text}: {player_name}",
+                message=f"Update: Your status change request for {player_name} has been {status_text}.",
+                target_url=f"/leads?search={quote(player_name)}",
+                priority="high",
+            )
+        except Exception:
+            pass
         return {
             "status": "success",
             "message": f"Request {'approved' if approved else 'rejected'}",
-            "request": {
-                "id": request.id,
-                "request_status": request.request_status,
-                "resolved_at": request.resolved_at.isoformat() if request.resolved_at else None,
-            }
+            "request": {"id": req.id, "request_status": req.status},
         }
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -2503,44 +3075,28 @@ def resolve_request_endpoint(
 def get_lead_requests_endpoint(
     lead_id: int,
     db: Session = Depends(get_session),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    """Get all status change and age category change requests for a specific lead."""
+    """Get all approval requests for a specific lead."""
     requests = get_requests_for_lead(db, lead_id)
-    age_cat_requests = get_age_category_requests_for_lead(db, lead_id)
-    formatted_requests = []
+    formatted = []
     for req in requests:
         requester = db.get(User, req.requested_by_id)
         resolver = db.get(User, req.resolved_by_id) if req.resolved_by_id else None
-        formatted_requests.append({
+        formatted.append({
             "id": req.id,
-            "type": "status",
-            "current_status": req.current_status,
-            "requested_status": req.requested_status,
+            "type": req.request_type,
+            "current_status": req.current_value,
+            "requested_status": req.requested_value,
             "reason": req.reason,
-            "request_status": req.request_status,
+            "request_status": req.status,
             "requested_by_name": requester.full_name if requester else "Unknown",
             "resolved_by_name": resolver.full_name if resolver else None,
             "created_at": req.created_at.isoformat() if req.created_at else None,
             "resolved_at": req.resolved_at.isoformat() if req.resolved_at else None,
         })
-    for req in age_cat_requests:
-        requester = db.get(User, req.requested_by_id)
-        resolver = db.get(User, req.resolved_by_id) if req.resolved_by_id else None
-        formatted_requests.append({
-            "id": req.id,
-            "type": "age_category",
-            "current_status": req.current_category,
-            "requested_status": req.requested_category,
-            "reason": req.reason,
-            "request_status": req.request_status,
-            "requested_by_name": requester.full_name if requester else "Unknown",
-            "resolved_by_name": resolver.full_name if resolver else None,
-            "created_at": req.created_at.isoformat() if req.created_at else None,
-            "resolved_at": req.resolved_at.isoformat() if req.resolved_at else None,
-        })
-    formatted_requests.sort(key=lambda x: x.get("created_at") or "", reverse=True)
-    return {"requests": formatted_requests}
+    formatted.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return {"requests": formatted}
 
 
 # ==========================================
@@ -2551,8 +3107,8 @@ def get_lead_requests_endpoint(
 def get_lead_preferences_public(token: str, db: Session = Depends(get_session)):
     """
     Get lead preferences by public token (no auth required).
-    
-    Returns lead name, center batches (filtered by age), and center name.
+
+    Returns lead name, center name, and all active batches at the center (no age filter).
     """
     preferences_data = get_lead_preferences_by_token(db, token)
     if not preferences_data:
@@ -2585,6 +3141,277 @@ def update_lead_preferences_public(
         if not updated_lead:
             raise HTTPException(status_code=404, detail="Lead not found")
         return {"message": "Preferences updated successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/public/join/{token}")
+def get_join_page_public(token: str, db: Session = Depends(get_session)):
+    """
+    Get lead or student info for the public Enrollment & Payment page (no auth).
+    Returns type 'lead' (new enrollment) or 'student' (renewal), and fields for form/UPI.
+    For lead: includes link_expires_at, batches for selection.
+    """
+    from backend.models import Batch
+    lead = db.exec(select(Lead).where(Lead.public_token == token)).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    center = db.get(Center, lead.center_id) if lead.center_id else None
+    center_name = center.display_name if center else "Unknown"
+    # Check if already converted to active student (renewal flow)
+    student = db.exec(select(Student).where(and_(Student.lead_id == lead.id, Student.is_active == True))).first()
+    if student:
+        return {
+            "type": "student",
+            "lead_id": lead.id,
+            "student_id": student.id,
+            "player_name": lead.player_name,
+            "center_name": center_name,
+            "plan_name": student.subscription_plan or "Monthly",
+            "plan_price": getattr(student, "_plan_price", None),  # Optional; frontend can use default
+        }
+    # Build batches list for lead (new enrollment)
+    batches_list = []
+    if lead.center_id:
+        batches = db.exec(
+            select(Batch).where(
+                and_(Batch.center_id == lead.center_id, Batch.is_active == True)
+            )
+        ).all()
+        for b in batches:
+            schedule_parts = []
+            if b.is_mon: schedule_parts.append("Mon")
+            if b.is_tue: schedule_parts.append("Tue")
+            if b.is_wed: schedule_parts.append("Wed")
+            if b.is_thu: schedule_parts.append("Thu")
+            if b.is_fri: schedule_parts.append("Fri")
+            if b.is_sat: schedule_parts.append("Sat")
+            if b.is_sun: schedule_parts.append("Sun")
+            schedule_str = ", ".join(schedule_parts) if schedule_parts else "No schedule"
+            time_str = ""
+            if b.start_time and b.end_time:
+                time_str = f"{b.start_time.strftime('%I:%M %p').lstrip('0')} - {b.end_time.strftime('%I:%M %p').lstrip('0')}"
+            batches_list.append({
+                "id": b.id,
+                "name": b.name,
+                "min_age": getattr(b, "min_age", 0),
+                "max_age": getattr(b, "max_age", 99),
+                "schedule": schedule_str,
+                "time": time_str,
+            })
+    link_expires_at = getattr(lead, "link_expires_at", None)
+    return {
+        "type": "lead",
+        "lead_id": lead.id,
+        "player_name": lead.player_name,
+        "center_name": center_name,
+        "plan_price": None,
+        "link_expires_at": link_expires_at.isoformat() if link_expires_at else None,
+        "batches": batches_list,
+    }
+
+
+class PublicEnrollmentSubmit(BaseModel):
+    """Enrollment submission (lead type). Requires email, plan, start_date. At least one of utr_number or payment_proof_url."""
+    email: str
+    subscription_plan: str  # e.g. 'Monthly', '3 Months', '6 Months', 'Yearly'
+    start_date: str  # YYYY-MM-DD
+    batch_id: int
+    utr_number: Optional[str] = None  # 12-digit UTR if provided
+    payment_proof_url: Optional[str] = None  # Supabase Storage URL for payment screenshot if provided
+    kit_size: Optional[str] = None
+    medical_info: Optional[str] = None
+    secondary_contact: Optional[str] = None
+
+
+@app.post("/public/lead-enrollment/{token}")
+def submit_enrollment_public(
+    token: str,
+    body: PublicEnrollmentSubmit,
+    db: Session = Depends(get_session),
+):
+    """
+    Submit enrollment (no auth). For leads with enrollment link sent.
+    Requires: Email, Subscription Plan, Start Date, UTR, Screenshot.
+    Sets status to 'Payment Pending Verification', stores pending_subscription_data, last_updated=now().
+    """
+    from datetime import datetime, date as date_type
+    from backend.core.audit import log_lead_activity, log_status_change
+    from backend.models import Batch
+
+    lead = db.exec(select(Lead).where(Lead.public_token == token)).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    utr = (body.utr_number or "").strip().replace(" ", "")
+    has_utr = len(utr) == 12 and utr.isdigit()
+    has_screenshot = bool(body.payment_proof_url and body.payment_proof_url.strip())
+    if not has_utr and not has_screenshot:
+        raise HTTPException(status_code=400, detail="Provide at least one: UTR (12 digits) or payment screenshot")
+    if utr and (len(utr) != 12 or not utr.isdigit()):
+        raise HTTPException(status_code=400, detail="UTR/Reference number must be exactly 12 digits")
+
+    if not body.email or not body.email.strip():
+        raise HTTPException(status_code=400, detail="Email is required")
+    if not body.subscription_plan:
+        raise HTTPException(status_code=400, detail="Subscription plan is required")
+    if not body.start_date:
+        raise HTTPException(status_code=400, detail="Start date is required")
+
+    batch = db.get(Batch, body.batch_id)
+    if not batch or batch.center_id != lead.center_id:
+        raise HTTPException(status_code=400, detail="Invalid batch for this center")
+
+    try:
+        start_date = date_type.fromisoformat(body.start_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid start date format (use YYYY-MM-DD)")
+
+    old_status = lead.status
+    lead.status = "Payment Pending Verification"
+    lead.email = body.email.strip()
+    lead.last_updated = datetime.utcnow()
+    lead.pending_subscription_data = {
+        "email": body.email.strip(),
+        "subscription_plan": body.subscription_plan,
+        "start_date": body.start_date,
+        "batch_id": body.batch_id,
+        "utr_number": utr if has_utr else None,
+        "payment_proof_url": body.payment_proof_url.strip() if has_screenshot else None,
+        "kit_size": body.kit_size,
+        "medical_info": body.medical_info,
+        "secondary_contact": body.secondary_contact,
+    }
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+
+    log_status_change(db, lead.id, None, old_status, lead.status)
+    log_lead_activity(db, lead.id, None, action_type="enrollment_submitted",
+        description=f"Enrollment submitted via public page. Plan: {body.subscription_plan}. UTR: {utr or '—'}, screenshot: {'yes' if has_screenshot else 'no'}. Pending verification.")
+
+    return {"message": "Enrollment submitted. We will verify your payment and get in touch."}
+
+
+class PublicJoinSubmit(BaseModel):
+    kit_size: Optional[str] = None
+    secondary_contact: Optional[str] = None
+    medical_info: Optional[str] = None
+    utr_number: Optional[str] = None  # 12-digit UTR if provided
+    payment_proof_url: Optional[str] = None  # Supabase Storage URL for payment screenshot if provided
+
+
+@app.post("/public/join/{token}")
+def submit_join_public(
+    token: str,
+    body: PublicJoinSubmit,
+    db: Session = Depends(get_session),
+):
+    """
+    Submit enrollment and payment details (no auth). Converts lead to student.
+    Requires 12-digit UTR number. Uses default subscription (Monthly, start today).
+    """
+    from datetime import date as date_type, timedelta
+    from backend.core.students import convert_lead_to_student
+
+    lead = db.exec(select(Lead).where(Lead.public_token == token)).first()
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+
+    utr = (body.utr_number or "").strip().replace(" ", "")
+    has_utr = len(utr) == 12 and utr.isdigit()
+    has_screenshot = bool(body.payment_proof_url and body.payment_proof_url.strip())
+    if not has_utr and not has_screenshot:
+        raise HTTPException(status_code=400, detail="Provide at least one: UTR (12 digits) or payment screenshot")
+    if utr and (len(utr) != 12 or not utr.isdigit()):
+        raise HTTPException(status_code=400, detail="UTR/Reference number must be exactly 12 digits")
+
+    # Renewal: lead already has active student — just record UTR and optional kit/medical
+    existing_student = db.exec(select(Student).where(and_(Student.lead_id == lead.id, Student.is_active == True))).first()
+    if existing_student:
+        existing_student.utr_number = utr if has_utr else (existing_student.utr_number or None)
+        existing_student.is_payment_verified = False
+        if has_screenshot:
+            existing_student.payment_proof_url = body.payment_proof_url.strip() if body.payment_proof_url else None
+        if body.kit_size is not None:
+            existing_student.kit_size = body.kit_size or None
+        if body.medical_info is not None:
+            existing_student.medical_info = body.medical_info or None
+        if body.secondary_contact is not None:
+            existing_student.secondary_contact = body.secondary_contact or None
+        db.add(existing_student)
+        db.commit()
+        db.refresh(existing_student)
+        from backend.core.audit import log_lead_activity
+        log_lead_activity(db, lead.id, None, action_type="renewal_utr", description=f"Renewal UTR submitted via public page. UTR: {utr}. Pending Verification.")
+        from backend.schemas.students import StudentRead
+        from sqlalchemy.orm import selectinload
+        stmt = select(Student).where(Student.id == existing_student.id).options(selectinload(Student.lead), selectinload(Student.batches))
+        student_with_relations = db.exec(stmt).first()
+        return StudentRead.from_student(student_with_relations)
+
+    # New enrollment: convert lead to student
+    today = date_type.today()
+    end_date = today + timedelta(days=31)
+    student_batch_ids = []
+    if getattr(lead, "preferred_batch_id", None):
+        student_batch_ids = [lead.preferred_batch_id]
+
+    student_data = {
+        "subscription_plan": "Monthly",
+        "subscription_start_date": today,
+        "subscription_end_date": end_date,
+        "center_id": lead.center_id,
+        "utr_number": utr if has_utr else None,
+        "payment_proof_url": body.payment_proof_url.strip() if has_screenshot else None,
+        "is_payment_verified": False,
+        "kit_size": body.kit_size or None,
+        "medical_info": body.medical_info or None,
+        "secondary_contact": body.secondary_contact or None,
+        "student_batch_ids": student_batch_ids,
+    }
+    try:
+        student = convert_lead_to_student(db=db, lead_id=lead.id, student_data=student_data, user_id=None)
+        from backend.schemas.students import StudentRead
+        from backend.core.audit import log_lead_activity
+        from backend.core.emails import send_payment_received_alert
+        from sqlalchemy.orm import selectinload
+        # Audit: public enrollment with UTR pending verification
+        log_lead_activity(
+            db, lead.id, None,
+            action_type="public_enrollment",
+            description=f"Student enrolled via public page. UTR: {utr}. Pending Verification.",
+        )
+        # Email Center Head: ACTION REQUIRED to verify (no parent email here; welcome email only on verify-payment)
+        try:
+            center = db.get(Center, lead.center_id)
+            center_name = (center.display_name or center.city or "Unknown") if center else "Unknown"
+            send_payment_received_alert(db, lead, center_name, utr if has_utr else None, body.payment_proof_url)
+        except Exception as _:
+            pass  # Non-blocking
+        # High-priority bell: Payment Submitted
+        try:
+            from backend.core.notifications import notify_center_users
+            import os
+            base_url = os.getenv("CRM_BASE_URL", "").strip().rstrip("/")
+            from urllib.parse import quote
+            link = f"{base_url}/leads?search={quote(lead.phone or '')}" if base_url and lead.phone else None
+            notify_center_users(
+                db, lead.center_id,
+                type="FINANCE_ALERT",
+                title=f"Payment to verify: {lead.player_name or 'Unknown'}",
+                message="Parent submitted UTR/payment. Please verify and confirm enrollment.",
+                link=link,
+                priority="high",
+            )
+        except Exception as _:
+            pass
+        stmt = select(Student).where(Student.id == student.id).options(
+            selectinload(Student.lead),
+            selectinload(Student.batches),
+        )
+        student_with_relations = db.exec(stmt).first()
+        return StudentRead.from_student(student_with_relations)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

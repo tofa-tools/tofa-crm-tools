@@ -10,6 +10,7 @@ class UserCreateSchema(BaseModel):
     email: str
     password: str
     full_name: str
+    phone: str  # Required for Center Head contact
     role: Literal["team_lead", "team_member", "coach", "observer"] = "team_member"
     center_ids: List[int] = []
     is_active: bool = True
@@ -18,6 +19,7 @@ class UserCreateSchema(BaseModel):
 class UserUpdateSchema(BaseModel):
     """Schema for updating an existing user."""
     full_name: Optional[str] = None
+    phone: Optional[str] = None
     role: Optional[Literal["team_lead", "team_member", "coach", "observer"]] = None
     is_active: Optional[bool] = None
     password: Optional[str] = None  # If provided, will be hashed and updated
@@ -29,6 +31,7 @@ class UserReadSchema(BaseModel):
     id: int
     email: str
     full_name: str
+    phone: Optional[str] = None
     role: str
     is_active: bool
     

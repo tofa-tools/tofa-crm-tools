@@ -3,12 +3,12 @@
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
+import React from 'react';
 import { useAuth } from '@/context/AuthContext';
 import { useQuery } from '@tanstack/react-query';
 import { approvalsAPI } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { brandConfig } from '@tofa/core';
-
 interface NavItem {
   label: string;
   href: string;
@@ -17,40 +17,16 @@ interface NavItem {
 }
 
 const navItems: NavItem[] = [
-  // Check-In for coaches (first item for them)
   { label: 'Check-In', href: '/check-in', icon: '✅', roles: ['coach'] },
   { label: 'Command Center', href: '/command-center', icon: '🚀' },
-  { label: 'My Leads', href: '/leads', icon: '👥' },
-  {
-    label: 'Batches',
-    href: '/batches',
-    icon: '📅',
-    roles: ['team_lead'],
-  },
-  {
-    label: 'Manage Centers',
-    href: '/centers',
-    icon: '🏢',
-    roles: ['team_lead'],
-  },
-  {
-    label: 'Manage Users',
-    href: '/users',
-    icon: '👤',
-    roles: ['team_lead'],
-  },
-  {
-    label: 'Approvals',
-    href: '/approvals',
-    icon: '⚖️',
-    roles: ['team_lead'],
-  },
-  {
-    label: 'Import Data',
-    href: '/import',
-    icon: '📊',
-    roles: ['team_lead'],
-  },
+  { label: 'Leads Management', href: '/leads', icon: '👥', roles: ['team_lead', 'team_member'] },
+  { label: 'Student Roster', href: '/students', icon: '⚽', roles: ['team_lead', 'team_member', 'observer'] },
+  { label: 'Field Captures', href: '/staging', icon: '📥', roles: ['team_lead', 'team_member'] },
+  { label: 'Approvals', href: '/approvals', icon: '⚖️', roles: ['team_lead', 'team_member'] },
+  { label: 'Batches', href: '/batches', icon: '📅', roles: ['team_lead'] },
+  { label: 'Manage Centers', href: '/centers', icon: '🏢', roles: ['team_lead'] },
+  { label: 'Manage Users', href: '/users', icon: '👤', roles: ['team_lead'] },
+  { label: 'Import Data', href: '/import', icon: '📊', roles: ['team_lead'] },
 ];
 
 interface SidebarProps {
@@ -62,12 +38,12 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
   const pathname = usePathname();
   const { user, logout } = useAuth();
 
-  // Fetch pending approvals count (team leads only)
+  // Fetch pending approvals count (team leads see all; team members see their own)
   const { data: pendingApprovalsData } = useQuery({
     queryKey: ['approvals', 'pending'],
     queryFn: () => approvalsAPI.getPendingRequests(),
-    enabled: user?.role === 'team_lead',
-    refetchInterval: 60000, // Refetch every minute
+    enabled: user?.role === 'team_lead' || user?.role === 'team_member',
+    refetchInterval: 60000,
   });
 
   const pendingApprovalsCount = pendingApprovalsData?.count || 0;
@@ -141,7 +117,7 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
       {!isCollapsed && (
         <div className="p-4 border-b border-gray-200">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center text-white font-semibold">
+            <div className="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center text-white font-semibold flex-shrink-0">
               {user?.email.charAt(0).toUpperCase()}
             </div>
             <div className="flex-1 min-w-0">
@@ -156,7 +132,7 @@ export function Sidebar({ isCollapsed, onToggleCollapse }: SidebarProps) {
         </div>
       )}
       {isCollapsed && (
-        <div className="p-4 border-b border-gray-200 flex justify-center">
+        <div className="p-4 border-b border-gray-200 flex flex-col items-center gap-2">
           <div className="w-10 h-10 rounded-full bg-indigo-500 flex items-center justify-center text-white font-semibold">
             {user?.email.charAt(0).toUpperCase()}
           </div>

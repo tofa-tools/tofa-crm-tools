@@ -1,6 +1,7 @@
 'use client';
 
 import { ReactNode } from 'react';
+import { NotificationBell } from '@/components/ui/NotificationBell';
 
 interface PageHeaderProps {
   title: string;
@@ -20,11 +21,10 @@ export function PageHeader({ title, subtitle, actions }: PageHeaderProps) {
             <p className="text-gray-300 mt-1 font-medium">{subtitle}</p>
           )}
         </div>
-        {actions && (
-          <div className="flex items-center gap-3 flex-shrink-0">
-            {actions}
-          </div>
-        )}
+        <div className="flex items-center gap-3 flex-shrink-0">
+          <NotificationBell buttonClassName="text-white hover:bg-white/20" />
+          {actions}
+        </div>
       </div>
     </div>
   );

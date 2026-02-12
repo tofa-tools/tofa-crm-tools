@@ -2,13 +2,16 @@
 Lead management business logic.
 Framework-agnostic lead CRUD operations.
 """
+import logging
 from sqlmodel import Session, select, func
 from typing import List, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, date
 from backend.models import Lead, Center, Comment, User, BatchCoachLink, Batch, StudentBatchLink, Student
 from sqlalchemy import or_
 import pandas as pd
 import uuid
+
+logger = logging.getLogger(__name__)
 
 
 def get_leads_for_user(
@@ -21,7 +24,9 @@ def get_leads_for_user(
     sort_by: str = "created_time",  # "created_time" or "freshness"
     next_follow_up_date_filter: Optional[str] = None,  # Filter by follow-up date (YYYY-MM-DD)
     at_risk_filter: Optional[bool] = None,  # Filter for at-risk leads (10 days inactive)
-    loss_reason_filter: Optional[str] = None  # Filter by loss_reason
+    overdue_filter: Optional[bool] = None,  # Filter for overdue leads (next_followup_date < today)
+    loss_reason_filter: Optional[str] = None,  # Filter by loss_reason
+    nudge_failures_filter: Optional[bool] = None,  # Filter for preference link not clicked within 48h (needs_escalation)
 ) -> Tuple[List[Lead], int]:
     """
     Get leads for a user based on their role with pagination support.
@@ -123,6 +128,33 @@ def get_leads_for_user(
         )
         query = query.where(at_risk_condition)
         count_query = count_query.where(at_risk_condition)
+
+    # Filter for overdue leads (next_followup_date < today, exclude Joined/Dead/Nurture)
+    if overdue_filter:
+        today_start = datetime.combine(date.today(), datetime.min.time())
+        query = query.where(
+            Lead.next_followup_date.isnot(None),
+            Lead.next_followup_date < today_start,
+            Lead.status.notin_(["Joined", "Dead/Not Interested", "Nurture"])
+        )
+        count_query = count_query.where(
+            Lead.next_followup_date.isnot(None),
+            Lead.next_followup_date < today_start,
+            Lead.status.notin_(["Joined", "Dead/Not Interested", "Nurture"])
+        )
+
+    # Filter for nudge failures (preference link not clicked within 48h)
+    if nudge_failures_filter:
+        query = query.where(
+            Lead.status == "Followed up with message",
+            Lead.preferences_submitted == False,
+            Lead.needs_escalation == True,
+        )
+        count_query = count_query.where(
+            Lead.status == "Followed up with message",
+            Lead.preferences_submitted == False,
+            Lead.needs_escalation == True,
+        )
     
     # Get total count
     total = db.exec(count_query).one()
@@ -171,12 +203,14 @@ def update_lead(
     next_date: Optional[str] = None,
     comment: Optional[str] = None,
     user_id: Optional[int] = None,
-    player_age_category: Optional[str] = None,  # New parameter for age category update
+    date_of_birth: Optional[date] = None,
     trial_batch_id: Optional[int] = None,  # New parameter for batch assignment
     permanent_batch_id: Optional[int] = None,  # New parameter for batch assignment
     student_batch_ids: Optional[List[int]] = None,  # Multi-batch assignment for joined students
     payment_proof_url: Optional[str] = None,  # URL to payment proof image
-    call_confirmation_note: Optional[str] = None  # Note confirming call with parent
+    call_confirmation_note: Optional[str] = None,  # Note confirming call with parent
+    loss_reason: Optional[str] = None,  # Reason for loss (off-ramp: Nurture/Dead)
+    loss_reason_notes: Optional[str] = None,  # Details when reason is 'Other'
 ) -> Lead:
     """
     Update a lead's status and optionally add a comment.
@@ -189,7 +223,7 @@ def update_lead(
         next_date: Next follow-up date (ISO format string)
         comment: Optional comment text
         user_id: User ID for the comment (if comment is provided)
-        age_category: Optional new age category
+        date_of_birth: Optional new date of birth
         
     Returns:
         Updated Lead object
@@ -206,7 +240,6 @@ def update_lead(
     # Track old values for audit log
     old_status = lead.status
     old_next_date = lead.next_followup_date.isoformat() if lead.next_followup_date else None
-    old_age_category = lead.player_age_category
     
     # Validate Joined status requires batch assignment BEFORE status change
     if status == "Joined":
@@ -241,6 +274,9 @@ def update_lead(
     
     # Update status
     if lead.status != status:
+        # Record lifecycle stage when moving to Dead or Nurture (for loss drill-down)
+        if status in ("Dead/Not Interested", "Nurture"):
+            lead.status_at_loss = lead.status
         lead.status = status
         # Auto-set do_not_contact for Dead/Not Interested status
         if status == "Dead/Not Interested":
@@ -284,6 +320,14 @@ def update_lead(
             # Reset do_not_contact if moving away from Dead status
             lead.do_not_contact = False
         
+        # Record when preference link was sent (for 48h nudge-failure escalation)
+        if status == "Followed up with message":
+            if not lead.extra_data:
+                lead.extra_data = {}
+            sent_at = datetime.utcnow().isoformat()
+            if "preference_link_sent_at" not in lead.extra_data:
+                lead.extra_data["preference_link_sent_at"] = sent_at
+
         # Record timestamp when status is set to 'Joined'
         if status == "Joined":
             # Store joined timestamp in extra_data
@@ -370,16 +414,19 @@ def update_lead(
         if user_id:
             log_status_change(db, lead_id, user_id, old_status, status)
     
-    # Update age category if provided
-    if player_age_category and player_age_category != lead.player_age_category:
-        lead.player_age_category = player_age_category
-        if user_id:
-            log_field_update(
-                db, lead_id, user_id,
-                'player_age_category',
-                old_age_category,
-                player_age_category
-            )
+    # Update date_of_birth if provided
+    if date_of_birth is not None:
+        old_dob_str = lead.date_of_birth.isoformat() if lead.date_of_birth else None
+        new_dob_str = date_of_birth.isoformat() if date_of_birth else None
+        if old_dob_str != new_dob_str:
+            lead.date_of_birth = date_of_birth
+            if user_id:
+                log_field_update(
+                    db, lead_id, user_id,
+                    'date_of_birth',
+                    old_dob_str,
+                    new_dob_str
+                )
     
     # Update trial_batch_id if provided
     if trial_batch_id is not None:
@@ -518,6 +565,18 @@ def update_lead(
                 None
             )
     
+    # Update loss_reason / loss_reason_notes (off-ramp: Nurture / Dead)
+    if loss_reason is not None:
+        old_reason = lead.loss_reason
+        lead.loss_reason = loss_reason
+        if old_reason != loss_reason and user_id:
+            log_field_update(db, lead_id, user_id, 'loss_reason', old_reason, loss_reason)
+    if loss_reason_notes is not None:
+        old_notes = lead.loss_reason_notes
+        lead.loss_reason_notes = loss_reason_notes
+        if old_notes != loss_reason_notes and user_id:
+            log_field_update(db, lead_id, user_id, 'loss_reason_notes', old_notes, loss_reason_notes)
+    
     # Update payment_proof_url if provided
     if payment_proof_url is not None:
         old_payment_proof = lead.payment_proof_url
@@ -567,14 +626,31 @@ def update_lead(
     return lead
 
 
+def _age_group_to_dob(age_group: str):
+    """Convert legacy age group (e.g. U9, Senior) to approximate date_of_birth for CSV/webhook import."""
+    import re
+    from datetime import date as date_type
+    s = str(age_group).strip()
+    m = re.match(r"^U(\d+)$", s, re.I)
+    if m:
+        age = max(0, int(m.group(1)) - 1)  # U9 = under 9 → ~8 years
+    elif s.lower() == "senior":
+        age = 17
+    else:
+        age = 10
+    year = datetime.utcnow().year - age
+    return date_type(year, 1, 1)
+
+
 def create_lead_from_meta(
     db: Session,
     phone: str,
     name: str,
     email: Optional[str],
     center_tag: str,
-    age_category: str,
-    address: Optional[str],
+    age_group: Optional[str] = None,
+    date_of_birth: Optional[date] = None,
+    address: Optional[str] = None,
     user_id: Optional[int] = None
 ) -> Lead:
     """
@@ -586,15 +662,13 @@ def create_lead_from_meta(
         name: Player name
         email: Email address (optional)
         center_tag: Center meta tag name
-        age_category: Player age category
+        age_group: Legacy - converted to approximate DOB if date_of_birth not provided
+        date_of_birth: Preferred - actual DOB
         address: Address (optional)
         user_id: Optional user ID for audit log
         
     Returns:
         Created or updated Lead object
-        
-    Raises:
-        ValueError: If center not found or phone is missing
     """
     from backend.core.duplicate_detection import find_duplicate_lead, handle_duplicate_lead
     
@@ -622,12 +696,16 @@ def create_lead_from_meta(
     from datetime import timedelta
     initial_followup = datetime.now() + timedelta(hours=24)
     
+    dob = date_of_birth
+    if not dob and age_group:
+        dob = _age_group_to_dob(age_group)
+    
     now = datetime.now()
     new_lead = Lead(
         created_time=now,
         last_updated=now,  # Set last_updated to same as created_time for new leads
         player_name=name if name else "Unknown",
-        player_age_category=age_category if age_category else "Unknown",
+        date_of_birth=dob,
         phone=phone,
         email=email,
         address=address,
@@ -640,21 +718,17 @@ def create_lead_from_meta(
     db.add(new_lead)
     db.commit()
     db.refresh(new_lead)
-    
     return new_lead
 
 
-def import_leads_from_dataframe(db: Session, df: pd.DataFrame, meta_col: str) -> tuple[int, List[str]]:
+def import_leads_from_dataframe(db: Session, df: pd.DataFrame, meta_col: str) -> tuple[int, List[str], List[dict]]:
     """
     Import leads from a pandas DataFrame.
-    
-    Args:
-        db: Database session
-        df: DataFrame with lead data
-        meta_col: Name of column containing center meta tags
-        
+    Does not send email; caller should send one summary per center via BackgroundTasks.
+
     Returns:
-        Tuple of (number of leads created, list of error messages)
+        Tuple of (number of leads created, list of error messages, summary_list).
+        summary_list: [{"center_id": int, "center_name": str, "count": int}, ...] for centers with count > 1 only.
     """
     from backend.core.duplicate_detection import find_duplicate_lead, handle_duplicate_lead
     
@@ -675,6 +749,7 @@ def import_leads_from_dataframe(db: Session, df: pd.DataFrame, meta_col: str) ->
     
     count = 0
     rows_processed = 0
+    created_leads_info: List[dict] = []  # {center_id, center_name, player_name, phone} per new lead
     for _, row in df.iterrows():
         rows_processed += 1
         center_val = str(row.get(meta_col, '')).strip() if pd.notna(row.get(meta_col)) else ''
@@ -701,11 +776,23 @@ def import_leads_from_dataframe(db: Session, df: pd.DataFrame, meta_col: str) ->
         # Set initial next_followup_date to 24 hours from now
         initial_followup = now + timedelta(hours=24)
         
+        dob_val = row.get('date_of_birth') or row.get('player_age_group')
+        dob_parsed = None
+        if pd.notna(dob_val):
+            try:
+                dt = pd.to_datetime(dob_val)
+                from datetime import date as date_type
+                dob_parsed = date_type(dt.year, dt.month, dt.day)
+            except Exception:
+                pass
+        if not dob_parsed and pd.notna(row.get('player_age_group')):
+            dob_parsed = _age_group_to_dob(str(row.get('player_age_group', 'U10')))
+        
         new_lead = Lead(
             created_time=now,  # Always use current time for CSV imports
             last_updated=now,  # Set last_updated to same as created_time for new leads
             player_name=player_name_val,
-            player_age_category=row.get('player_age_category', 'Unknown'),
+            date_of_birth=dob_parsed,
             phone=phone_val,
             email=email_val,
             address=row.get('address_and_pincode', ''),
@@ -716,10 +803,29 @@ def import_leads_from_dataframe(db: Session, df: pd.DataFrame, meta_col: str) ->
         )
         db.add(new_lead)
         count += 1
+        center_name = center.display_name or center.city or str(center.id)
+        created_leads_info.append({
+            "center_id": center.id,
+            "center_name": center_name,
+            "player_name": player_name_val,
+            "phone": phone_val,
+        })
     
     db.commit()
-    
-    return count, errors
+
+    # One summary per center with count > 1. No individual emails for CSV import.
+    by_center: dict = {}
+    for info in created_leads_info:
+        cid = info["center_id"]
+        if cid not in by_center:
+            by_center[cid] = {"center_name": info["center_name"], "count": 0}
+        by_center[cid]["count"] += 1
+    summary_list = [
+        {"center_id": cid, "center_name": data["center_name"], "count": data["count"]}
+        for cid, data in by_center.items()
+        if data["count"] > 1
+    ]
+    return count, errors, summary_list
 
 
 def check_nudge_expiry(db: Session) -> List[int]:

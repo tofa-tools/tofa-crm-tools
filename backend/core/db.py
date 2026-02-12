@@ -103,6 +103,12 @@ def create_db_and_tables():
                 db_session.exec(text("ALTER TABLE lead ADD COLUMN metadata JSONB DEFAULT '{}'::jsonb"))
                 db_session.commit()
                 print("✅ Added metadata column to lead table")
+        if 'status_at_loss' not in columns:
+            print("Adding status_at_loss column to lead table...")
+            with Session(engine) as db_session:
+                db_session.exec(text('ALTER TABLE "lead" ADD COLUMN status_at_loss VARCHAR'))
+                db_session.commit()
+                print("✅ Added status_at_loss column to lead table")
     except Exception as e:
-        print(f"Note: Could not check/add date_of_birth or metadata columns: {e}")
+        print(f"Note: Could not check/add lead table columns: {e}")
 

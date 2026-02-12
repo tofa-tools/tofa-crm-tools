@@ -1,10 +1,16 @@
 import type { Metadata } from 'next';
-import { Inter, Cinzel, Playfair_Display, Bodoni_Moda, Montserrat } from 'next/font/google';
+import { Inter, Cinzel, Playfair_Display, Bodoni_Moda, Montserrat, Bebas_Neue } from 'next/font/google';
 import './globals.css';
 import { Providers } from './providers';
 import { brandConfig } from '@tofa/core';
 
 const inter = Inter({ subsets: ['latin'] });
+const bebasNeue = Bebas_Neue({
+  weight: '400',
+  subsets: ['latin'],
+  variable: '--font-bebas',
+  display: 'swap',
+});
 const cinzel = Cinzel({
   weight: ['400', '700'],
   subsets: ['latin'],
@@ -45,7 +51,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body className={`${inter.className} ${cinzel.variable} ${playfairDisplay.variable} ${bodoniModa.variable} ${montserrat.variable}`}>
+      <body className={`${inter.className} ${bebasNeue.variable} ${cinzel.variable} ${playfairDisplay.variable} ${bodoniModa.variable} ${montserrat.variable}`}>
         <Providers>{children}</Providers>
       </body>
     </html>

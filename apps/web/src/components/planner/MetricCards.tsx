@@ -49,64 +49,50 @@ export function MetricCards({ salesMetrics, coachMetrics, onMetricClick, onStagi
     const emergencyTotal = (salesMetrics.overdue || 0) + (salesMetrics.reschedule_count || 0);
     const revenueTotal = (salesMetrics.hot_trials_count || 0) + (salesMetrics.expiring_soon_count || 0);
     const pipelineTotal = (salesMetrics.unscheduled || 0) + (salesMetrics.post_trial_no_response_count || 0);
-    const retentionTotal = (salesMetrics.milestones_count || 0) + (salesMetrics.on_break_count || 0);
+
+    const stagingCount = salesMetrics.staging_leads_count ?? 0;
+    const hasStagingPulse = stagingCount > 0;
 
     return (
-      <div className="space-y-6">
-        {/* Staging Leads Card */}
-        {salesMetrics.staging_leads_count !== undefined && salesMetrics.staging_leads_count > 0 && (
-          <MetricCard
-            title="📥 New Field Leads"
-            value={salesMetrics.staging_leads_count}
-            delta="Captured by coaches - Ready to promote"
-            icon="📥"
-            className="border-l-4 border-brand-accent cursor-pointer hover:shadow-xl transition-all bg-gradient-to-r from-brand-accent/10 to-transparent"
-            onClick={onStagingClick}
-          />
-        )}
-        
-        {/* Action Pillars */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {/* Pillar 1: Emergency */}
-          <MetricCard
-            title="🚨 Emergency"
-            value={emergencyTotal}
-            delta={`${salesMetrics.overdue || 0} Overdue • ${salesMetrics.reschedule_count || 0} Reschedule`}
-            icon="🚨"
-            className="border-l-4 border-red-500 cursor-pointer hover:shadow-xl transition-all"
-            onClick={() => onMetricClick?.('overdue')}
-          />
-          
-          {/* Pillar 2: Revenue */}
-          <MetricCard
-            title="💰 Revenue"
-            value={revenueTotal}
-            delta={`${salesMetrics.hot_trials_count || 0} Hot Trials • ${salesMetrics.expiring_soon_count || 0} Renewals`}
-            icon="💰"
-            className="border-l-4 border-emerald-500 cursor-pointer hover:shadow-xl transition-all"
-            onClick={() => onMetricClick?.('hot_trials')}
-          />
-          
-          {/* Pillar 3: Pipeline */}
-          <MetricCard
-            title="📊 Pipeline"
-            value={pipelineTotal}
-            delta={`${salesMetrics.unscheduled || 0} New Leads • ${salesMetrics.post_trial_no_response_count || 0} Pending Trials`}
-            icon="📊"
-            className="border-l-4 border-blue-500 cursor-pointer hover:shadow-xl transition-all"
-            onClick={() => onMetricClick?.('unscheduled')}
-          />
-          
-          {/* Pillar 4: Retention */}
-          <MetricCard
-            title="⭐ Retention"
-            value={retentionTotal}
-            delta={`${salesMetrics.milestones_count || 0} Milestones • ${salesMetrics.on_break_count || 0} On Break`}
-            icon="⭐"
-            className="border-l-4 border-amber-500 cursor-pointer hover:shadow-xl transition-all"
-            onClick={() => onMetricClick?.('milestones')}
-          />
-        </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {/* Field Captures - Staging (replaces Milestones) */}
+        <MetricCard
+          title="📥 Field Captures"
+          value={stagingCount}
+          delta="Captured by coaches • Ready to promote"
+          icon="📥"
+          iconClassName={hasStagingPulse ? "text-4xl text-brand-accent" : undefined}
+          className={`border-l-4 border-brand-accent cursor-pointer hover:shadow-xl transition-all ${hasStagingPulse ? "bg-gradient-to-r from-brand-accent/10 to-transparent ring-2 ring-brand-accent animate-pulse" : ""}`}
+          onClick={onStagingClick}
+        />
+        {/* Emergency */}
+        <MetricCard
+          title="🚨 Emergency"
+          value={emergencyTotal}
+          delta={`${salesMetrics.overdue || 0} Overdue • ${salesMetrics.reschedule_count || 0} Reschedule`}
+          icon="🚨"
+          className="border-l-4 border-red-500 cursor-pointer hover:shadow-xl transition-all"
+          onClick={() => onMetricClick?.('overdue')}
+        />
+        {/* Ready to Enroll */}
+        <MetricCard
+          title="💰 Ready to Enroll"
+          value={revenueTotal}
+          delta={`${salesMetrics.hot_trials_count || 0} Hot Trials • ${salesMetrics.expiring_soon_count || 0} Renewals`}
+          icon={<span className="text-tofa-gold font-black text-2xl">₹</span>}
+          iconClassName="text-tofa-gold"
+          className="border-l-4 border-emerald-500 cursor-pointer hover:shadow-xl transition-all"
+          onClick={() => onMetricClick?.('hot_trials')}
+        />
+        {/* Active Prospects */}
+        <MetricCard
+          title="📈 Active Prospects"
+          value={pipelineTotal}
+          delta={`${salesMetrics.unscheduled || 0} New Leads • ${salesMetrics.post_trial_no_response_count || 0} Pending Trials`}
+          icon="📊"
+          className="border-l-4 border-blue-500 cursor-pointer hover:shadow-xl transition-all"
+          onClick={() => onMetricClick?.('unscheduled')}
+        />
       </div>
     );
   }

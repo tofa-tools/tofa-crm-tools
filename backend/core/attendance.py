@@ -144,6 +144,32 @@ def record_attendance(
             old_value=old_status,
             new_value="Trial Attended"
         )
+        # Email + Bell (High Priority): Trial Attended -> Center Head group
+        from backend.core.emails import send_internal_notification
+        if lead.center_id:
+            send_internal_notification(
+                db,
+                lead.center_id,
+                f"Hot Lead! {player_name} just finished their trial",
+                f"{player_name} just finished their trial (marked Present by {coach_name} for {batch_name}).",
+            )
+            # High-priority bell
+            try:
+                from backend.core.notifications import notify_center_users
+                import os
+                base_url = os.getenv("CRM_BASE_URL", "").strip().rstrip("/")
+                from urllib.parse import quote
+                link = f"{base_url}/leads?search={quote(lead.phone or '')}" if base_url and lead.phone else None
+                notify_center_users(
+                    db, lead.center_id,
+                    type="SALES_ALERT",
+                    title=f"Hot Lead! {player_name} just finished trial",
+                    message=f"Marked Present by {coach_name} for {batch_name}.",
+                    link=link,
+                    priority="high",
+                )
+            except Exception as _:
+                pass
     elif status == "Absent" and lead.status == "Trial Scheduled":
         # For Trial Scheduled leads who are absent:
         # Keep status as 'Trial Scheduled'

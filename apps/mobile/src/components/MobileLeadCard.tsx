@@ -3,7 +3,7 @@ import { View, TouchableOpacity, StyleSheet, Linking } from 'react-native';
 import { StandardText } from './StandardText';
 import { brandColors } from '../theme/brandTheme';
 import type { Lead } from '@tofa/core';
-import { generateWhatsAppLink } from '@tofa/core';
+import { generateWhatsAppLink, calculateAge } from '@tofa/core';
 
 interface MobileLeadCardProps {
   lead: Lead;
@@ -27,7 +27,7 @@ export function MobileLeadCard({ lead }: MobileLeadCardProps) {
           {lead.player_name}
         </StandardText>
         <StandardText variant="muted" style={styles.age}>
-          {lead.player_age_category}
+          {lead.date_of_birth ? (calculateAge(lead.date_of_birth) ?? '') : ''}
         </StandardText>
       </View>
       <TouchableOpacity

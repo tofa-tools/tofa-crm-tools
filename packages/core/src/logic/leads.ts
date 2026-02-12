@@ -13,6 +13,7 @@ export const STATUS_FLOW: LeadStatus[] = [
   'Called',
   'Trial Scheduled',
   'Trial Attended',
+  'Payment Pending Verification',
   'Joined',
 ];
 

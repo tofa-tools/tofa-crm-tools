@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react';
 import { X, MessageCircle } from 'lucide-react';
 import type { Lead, LeadStatus } from '@tofa/core';
 import { useCenters } from '@/hooks/useCenters';
-import { brandConfig, formatMessage, generateWhatsAppLink } from '@tofa/core';
+import { brandConfig, formatMessage, generateWhatsAppLink, calculateAge } from '@tofa/core';
 
 interface QuickUpdateModalProps {
   lead: Lead;
@@ -103,8 +103,8 @@ export function QuickUpdateModal({
         <div className="p-4 border-b border-gray-200 space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <p className="text-xs text-gray-500 mb-1">Age Category</p>
-              <p className="text-sm font-medium text-gray-900">{lead.player_age_category || 'N/A'}</p>
+              <p className="text-xs text-gray-500 mb-1">Age Group</p>
+              <p className="text-sm font-medium text-gray-900">{lead.date_of_birth ? (calculateAge(lead.date_of_birth) ?? 'N/A') : 'N/A'}</p>
             </div>
             {lead.created_time && (
               <div>

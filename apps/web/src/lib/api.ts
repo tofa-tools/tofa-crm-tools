@@ -27,8 +27,8 @@ const API_URL =
   process.env.NODE_ENV === 'production'
     ? (rawApiUrl.startsWith('http://') ? rawApiUrl.replace(/^http:\/\//i, 'https://') : rawApiUrl)
     : rawApiUrl;
-// No trailing slash on baseURL (prevents redirects that drop CORS headers)
-const baseURL = API_URL.replace(/\/$/, '');
+// No trailing slash on baseURL (prevents 307 redirects that drop CORS headers → Mixed Content)
+const baseURL = API_URL.replace(/\/+$/, '');
 
 if (process.env.NODE_ENV !== 'production') {
   console.log('[api] baseURL:', baseURL);
@@ -146,6 +146,8 @@ export const leadsAPI = {
       subscription_end_date: update.subscription_end_date,
       payment_proof_url: update.payment_proof_url,
       call_confirmation_note: update.call_confirmation_note,
+      loss_reason: update.loss_reason,
+      loss_reason_notes: update.loss_reason_notes,
     });
 
     const response = await apiClient.put(`/leads/${leadId}`, null, {
@@ -154,13 +156,11 @@ export const leadsAPI = {
     return response.data;
   },
 
-  updateAgeCategory: async (
+  updateDateOfBirth: async (
     leadId: number,
-    ageCategory: string
-  ): Promise<{ status: string; age_category: string }> => {
-    const response = await apiClient.put(`/leads/${leadId}/age-category`, null, {
-      params: { age_category: ageCategory },
-    });
+    dateOfBirth: string
+  ): Promise<{ status: string; date_of_birth: string | null }> => {
+    const response = await apiClient.put(`/leads/${leadId}/date-of-birth`, { date_of_birth: dateOfBirth });
     return response.data;
   },
 
@@ -206,13 +206,11 @@ export const leadsAPI = {
 
   createLead: async (data: {
     player_name: string;
-    player_age_category: string;
     phone: string;
     email?: string;
     address?: string;
     date_of_birth?: string;
     center_id: number;
-    status: string;
   }): Promise<Lead> => {
     const response = await apiClient.post('/leads', data);
     return response.data;
@@ -292,6 +290,18 @@ export const leadsAPI = {
     });
     return response.data;
   },
+
+  sendEnrollmentLink: async (leadId: number): Promise<{ message: string; link: string; expires_at: string }> => {
+    const response = await apiClient.post<{ message: string; link: string; expires_at: string }>(
+      `/leads/${leadId}/send-enrollment-link`
+    );
+    return response.data;
+  },
+
+  verifyAndEnroll: async (leadId: number): Promise<any> => {
+    const response = await apiClient.post(`/leads/${leadId}/verify-and-enroll`);
+    return response.data;
+  },
 };
 
 // Students API
@@ -356,6 +366,28 @@ export const studentsAPI = {
     }>(`/students/${studentId}/milestones`);
     return response.data;
   },
+
+  getStudentByLeadId: async (leadId: number): Promise<any> => {
+    const response = await apiClient.get<any>(`/students/by-lead/${leadId}`);
+    return response.data;
+  },
+
+  sendWelcomeEmail: async (studentId: number): Promise<{ message: string; to: string }> => {
+    const response = await apiClient.post<{ message: string; to: string }>(
+      `/students/${studentId}/send-welcome-email`
+    );
+    return response.data;
+  },
+
+  getPaymentUnverified: async (): Promise<{ id: number; lead_id: number; player_name: string; utr_number: string; payment_proof_url?: string | null; date?: string | null }[]> => {
+    const response = await apiClient.get('/students/payment-unverified');
+    return response.data;
+  },
+
+  verifyPayment: async (studentId: number): Promise<{ status: string; is_payment_verified: boolean }> => {
+    const response = await apiClient.patch(`/students/${studentId}/verify-payment`);
+    return response.data;
+  },
 };
 
 // Users API
@@ -406,8 +438,15 @@ export const analyticsAPI = {
     const response = await apiClient.get('/analytics/command-center', { params });
     return response.data;
   },
-  getConversionRates: async (): Promise<{ conversion_rates: Record<string, number> }> => {
-    const response = await apiClient.get<{ conversion_rates: Record<string, number> }>('/analytics/conversion-rates');
+  getConversionRates: async (): Promise<{
+    conversion_rates: Record<string, number>;
+    funnel?: {
+      engagement: { rate: number; numerator: number; denominator: number };
+      commitment: { rate: number; numerator: number; denominator: number };
+      success: { rate: number; numerator: number; denominator: number };
+    };
+  }> => {
+    const response = await apiClient.get('/analytics/conversion-rates');
     return response.data;
   },
 
@@ -467,6 +506,7 @@ export const stagingAPI = {
     player_name: string;
     phone: string;
     email?: string;
+    age?: number;
     center_id: number;
   }): Promise<any> => {
     const response = await apiClient.post('/staging/leads', data);
@@ -482,10 +522,9 @@ export const stagingAPI = {
   promoteStagingLead: async (
     stagingId: number,
     data: {
-      player_age_category: string;
+      date_of_birth?: string;  // Optional - backend derives from staging.age if not provided
       email?: string;
       address?: string;
-      date_of_birth?: string;
     }
   ): Promise<Lead> => {
     const response = await apiClient.post(`/staging/leads/${stagingId}/promote`, data);
@@ -610,7 +649,8 @@ export const batchesAPI = {
     const params = buildQueryParams({
       name: data.name,
       center_id: data.center_id,
-      age_category: data.age_category,
+      min_age: data.min_age,
+      max_age: data.max_age,
       max_capacity: data.max_capacity,
       is_mon: data.is_mon,
       is_tue: data.is_tue,
@@ -649,7 +689,8 @@ export const batchesAPI = {
     const params = buildQueryParams({
       name: data.name,
       center_id: data.center_id,
-      age_category: data.age_category,
+      min_age: data.min_age,
+      max_age: data.max_age,
       max_capacity: data.max_capacity,
       is_mon: data.is_mon,
       is_tue: data.is_tue,
@@ -698,7 +739,6 @@ export const attendanceAPI = {
     student_id?: number;
     batch_id: number;
     date: string;
-    status: string;
   }> => {
     const params = buildQueryParams({
       lead_id: data.lead_id,
@@ -715,7 +755,6 @@ export const attendanceAPI = {
       lead_id: number;
       batch_id: number;
       date: string;
-      status: string;
     }>('/attendance/check-in', null, { params });
     return response.data;
   },
@@ -797,35 +836,34 @@ export const uploadFile = async (file: File, bucketName: string = 'payment-proof
   }
 };
 
-// Approvals API
+// Approvals API (Unified Request System)
+export type ApprovalRequestType = 'STATUS_REVERSAL' | 'DEACTIVATE' | 'DATA_UPDATE' | 'CENTER_TRANSFER' | 'AGE_GROUP' | 'BATCH_UPDATE' | 'SUBSCRIPTION_UPDATE';
+
 export const approvalsAPI = {
-  createRequest: async (data: {
-    lead_id: number;
-    current_status: string;
-    requested_status: string;
+  createApprovalRequest: async (data: {
+    request_type: ApprovalRequestType;
     reason: string;
+    current_value?: string;
+    requested_value?: string;
+    lead_id?: number;
+    student_id?: number;
   }): Promise<{ status: string; message: string; request_id: number }> => {
-    const params = buildQueryParams({
-      lead_id: data.lead_id,
-      current_status: data.current_status,
-      requested_status: data.requested_status,
-      reason: data.reason,
-    });
-    
-    const response = await apiClient.post('/approvals/request', null, { params });
+    const response = await apiClient.post('/approvals/create', data);
     return response.data;
   },
-  
+
   getPendingRequests: async (): Promise<{
     requests: Array<{
       id: number;
-      type?: 'status' | 'age_category';
-      lead_id: number;
+      request_type: string;
+      lead_id?: number;
+      student_id?: number;
       lead_name: string;
       requested_by_name: string;
-      current_status: string;
-      requested_status: string;
+      current_value: string;
+      requested_value: string;
       reason: string;
+      status: string;
       created_at: string;
     }>;
     count: number;
@@ -833,25 +871,24 @@ export const approvalsAPI = {
     const response = await apiClient.get('/approvals/pending');
     return response.data;
   },
-  
-  resolveRequest: async (
+
+  resolveApprovalRequest: async (
     requestId: number,
     approved: boolean,
     resolutionNote?: string
   ): Promise<{ status: string; message: string }> => {
     const params = buildQueryParams({
-      approved: approved,
-      resolution_note: resolutionNote,
+      approved,
+      ...(resolutionNote != null && { resolution_note: resolutionNote }),
     });
-    
     const response = await apiClient.post(`/approvals/${requestId}/resolve`, null, { params });
     return response.data;
   },
-  
+
   getLeadRequests: async (leadId: number): Promise<{
     requests: Array<{
       id: number;
-      type?: 'status' | 'age_category';
+      type?: string;
       current_status: string;
       requested_status: string;
       reason: string;
@@ -865,16 +902,39 @@ export const approvalsAPI = {
     const response = await apiClient.get(`/approvals/lead/${leadId}`);
     return response.data;
   },
+};
 
-  createAgeCategoryRequest: async (data: { lead_id: number; requested_category: string; reason?: string }): Promise<{ status: string; message: string; request_id: number }> => {
-    const params = buildQueryParams({ lead_id: data.lead_id, requested_category: data.requested_category, ...(data.reason != null && { reason: data.reason }) });
-    const response = await apiClient.post('/approvals/request-age-category', null, { params });
+// Notifications API (in-app bell)
+export const notificationsAPI = {
+  getNotifications: async (params?: { limit?: number; offset?: number; unread_only?: boolean; hours?: number }): Promise<Array<{
+    id: number;
+    user_id: number;
+    type: string;
+    title: string;
+    message: string;
+    link: string | null;
+    target_url: string | null;
+    is_read: boolean;
+    created_at: string | null;
+    center_id?: number | null;
+    priority?: string;
+  }>> => {
+    const response = await apiClient.get('/notifications', { params: params ?? {} });
     return response.data;
   },
 
-  resolveAgeCategoryRequest: async (requestId: number, approved: boolean, resolutionNote?: string): Promise<{ status: string; message: string }> => {
-    const params = buildQueryParams({ approved, ...(resolutionNote != null && { resolution_note: resolutionNote }) });
-    const response = await apiClient.post(`/approvals/age-category/${requestId}/resolve`, null, { params });
+  getUnreadCount: async (): Promise<{ count: number }> => {
+    const response = await apiClient.get('/notifications/unread-count');
+    return response.data;
+  },
+
+  markAsRead: async (notificationId: number): Promise<{ status: string }> => {
+    const response = await apiClient.put(`/notifications/${notificationId}/read`);
+    return response.data;
+  },
+
+  markAllAsRead: async (): Promise<{ marked_count: number }> => {
+    const response = await apiClient.put('/notifications/read-all');
     return response.data;
   },
 };

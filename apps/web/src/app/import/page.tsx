@@ -231,7 +231,7 @@ export default function ImportPage() {
               </li>
               <li>
                 <code className="bg-gray-100 px-2 py-1 rounded">
-                  player_age_category
+                  date_of_birth
                 </code>
               </li>
               <li>

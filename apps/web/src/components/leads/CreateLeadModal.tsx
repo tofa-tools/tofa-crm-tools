@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
-import { AGE_CATEGORIES, calculateAgeCategory } from '@tofa/core';
 import { leadsAPI } from '@/lib/api';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
@@ -16,31 +15,25 @@ interface CreateLeadModalProps {
   onClose: () => void;
 }
 
-const LEAD_STATUSES = ['New', 'Called', 'Trial Scheduled', 'Trial Attended', 'Joined', 'Nurture', 'Dead/Not Interested'];
-
 export function CreateLeadModal({ isOpen, onClose }: CreateLeadModalProps) {
   const queryClient = useQueryClient();
   const { data: centers = [] } = useCenters();
   
   const [playerName, setPlayerName] = useState('');
-  const [playerAgeCategory, setPlayerAgeCategory] = useState('');
   const [dateOfBirth, setDateOfBirth] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [address, setAddress] = useState('');
   const [centerId, setCenterId] = useState<number | ''>('');
-  const [status, setStatus] = useState('New');
 
   const createLeadMutation = useMutation({
     mutationFn: (data: {
       player_name: string;
-      player_age_category: string;
       phone: string;
       email?: string;
       address?: string;
       date_of_birth?: string;
       center_id: number;
-      status: string;
     }) => leadsAPI.createLead(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['leads'] });
@@ -54,44 +47,31 @@ export function CreateLeadModal({ isOpen, onClose }: CreateLeadModalProps) {
     },
   });
 
-  // When DOB is set and age category is empty, auto-suggest category from DOB (do not overwrite if user already chose)
-  const suggestedCategory = dateOfBirth ? calculateAgeCategory(dateOfBirth) : null;
-  useEffect(() => {
-    if (suggestedCategory && !playerAgeCategory) {
-      setPlayerAgeCategory(suggestedCategory);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- only suggest when DOB changes; do not overwrite user's category
-  }, [dateOfBirth, suggestedCategory]);
-
   const handleClose = () => {
     setPlayerName('');
-    setPlayerAgeCategory('');
     setDateOfBirth('');
     setPhone('');
     setEmail('');
     setAddress('');
     setCenterId('');
-    setStatus('New');
     onClose();
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!playerName || !phone || !playerAgeCategory || !centerId) {
+    if (!playerName || !phone || !dateOfBirth || !centerId) {
       toast.error('Please fill in all required fields');
       return;
     }
 
     createLeadMutation.mutate({
       player_name: playerName,
-      player_age_category: playerAgeCategory,
       phone: phone,
       email: email || undefined,
       address: address || undefined,
-      date_of_birth: dateOfBirth || undefined,
+      date_of_birth: dateOfBirth,
       center_id: Number(centerId),
-      status: status,
     });
   };
 
@@ -130,37 +110,15 @@ export function CreateLeadModal({ isOpen, onClose }: CreateLeadModalProps) {
 
             <div>
               <label className="block text-xs font-medium text-gray-700 mb-2">
-                Age Category *
-              </label>
-              <Select
-                value={playerAgeCategory}
-                onChange={(e) => setPlayerAgeCategory(e.target.value)}
-                required
-              >
-                <option value="">Select age category</option>
-                {AGE_CATEGORIES.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
-                ))}
-              </Select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-2">
-                Date of Birth (Optional)
+                Date of Birth *
               </label>
               <Input
                 type="date"
                 value={dateOfBirth}
                 onChange={(e) => setDateOfBirth(e.target.value)}
                 placeholder="YYYY-MM-DD"
+                required
               />
-              {suggestedCategory && (
-                <p className="mt-1.5 text-xs text-gray-500">
-                  Child will be placed in <span className="font-medium text-gray-700">{suggestedCategory}</span>
-                </p>
-              )}
             </div>
 
             <div>
@@ -208,21 +166,6 @@ export function CreateLeadModal({ isOpen, onClose }: CreateLeadModalProps) {
               </Select>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-gray-700 mb-2">
-                Status
-              </label>
-              <Select
-                value={status}
-                onChange={(e) => setStatus(e.target.value)}
-              >
-                {LEAD_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </Select>
-            </div>
           </div>
 
           <div>
@@ -251,7 +194,7 @@ export function CreateLeadModal({ isOpen, onClose }: CreateLeadModalProps) {
               type="submit"
               variant="primary"
               className="flex-1"
-              disabled={createLeadMutation.isPending || !playerName || !phone || !playerAgeCategory || !centerId}
+              disabled={createLeadMutation.isPending || !playerName || !phone || !dateOfBirth || !centerId}
             >
               {createLeadMutation.isPending ? 'Creating...' : 'Create Lead'}
             </Button>

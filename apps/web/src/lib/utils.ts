@@ -34,7 +34,12 @@ export function formatDateTime(dateString: string): string {
   }
 }
 
+/** Format amount in Indian Rupees (₹). */
+export function formatCurrency(amount: number): string {
+  return `₹${amount.toLocaleString('en-IN')}`;
+}
+
 /** Re-export from @tofa/core for backward compatibility. Use @tofa/core for new code. */
-export { calculateAgeCategory } from '@tofa/core';
+export { calculateAge } from '@tofa/core';
 
 

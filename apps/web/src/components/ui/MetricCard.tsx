@@ -5,11 +5,12 @@ interface MetricCardProps {
   value: string | number;
   delta?: string;
   icon?: ReactNode;
+  iconClassName?: string;
   onClick?: () => void;
   className?: string;
 }
 
-export function MetricCard({ title, value, delta, icon, onClick, className = '' }: MetricCardProps) {
+export function MetricCard({ title, value, delta, icon, iconClassName, onClick, className = '' }: MetricCardProps) {
   return (
     <div 
       className={`bg-white rounded-lg shadow-md p-6 border-l-4 border-indigo-500 ${onClick ? 'cursor-pointer hover:shadow-lg transition-shadow' : ''} ${className}`}
@@ -23,7 +24,7 @@ export function MetricCard({ title, value, delta, icon, onClick, className = '' 
             <p className="text-sm text-gray-500 mt-1">{delta}</p>
           )}
         </div>
-        {icon && <div className="text-4xl opacity-50">{icon}</div>}
+        {icon && <div className={iconClassName ?? 'text-4xl opacity-50'}>{icon}</div>}
       </div>
     </div>
   );

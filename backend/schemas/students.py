@@ -15,6 +15,11 @@ class StudentRead(BaseModel):
     subscription_start_date: date
     subscription_end_date: Optional[date] = None
     payment_proof_url: Optional[str] = None
+    utr_number: Optional[str] = None
+    is_payment_verified: bool = False
+    kit_size: Optional[str] = None
+    medical_info: Optional[str] = None
+    secondary_contact: Optional[str] = None
     renewal_intent: bool = False
     in_grace_period: bool = False
     grace_nudge_count: int = 0
@@ -25,7 +30,7 @@ class StudentRead(BaseModel):
     lead_phone: Optional[str] = None  # Phone from lead
     lead_email: Optional[str] = None  # Email from lead
     lead_address: Optional[str] = None  # Address from lead
-    lead_player_age_category: Optional[str] = None  # Age category from lead
+    lead_player_age: Optional[int] = None  # Age from lead's DOB
     lead_date_of_birth: Optional[date] = None  # DOB from lead (for missing-DOB flag)
     lead_status: Optional[str] = None  # Status from lead
     student_batch_ids: Optional[List[int]] = None  # Batch IDs from relationship
@@ -46,7 +51,7 @@ class StudentRead(BaseModel):
         phone = None
         email = None
         address = None
-        age_category = None
+        lead_age = None
         lead_dob = None
         status = None
         if hasattr(obj, 'lead') and obj.lead:
@@ -55,8 +60,10 @@ class StudentRead(BaseModel):
             phone = lead.phone
             email = lead.email
             address = lead.address
-            age_category = lead.player_age_category
             lead_dob = getattr(lead, 'date_of_birth', None)
+            if lead_dob:
+                from backend.core.age_utils import calculate_age
+                lead_age = calculate_age(lead_dob)
             status = lead.status
         
         return StudentRead(
@@ -67,6 +74,11 @@ class StudentRead(BaseModel):
             subscription_start_date=obj.subscription_start_date,
             subscription_end_date=obj.subscription_end_date,
             payment_proof_url=obj.payment_proof_url,
+            utr_number=getattr(obj, 'utr_number', None),
+            is_payment_verified=getattr(obj, 'is_payment_verified', False),
+            kit_size=getattr(obj, 'kit_size', None),
+            medical_info=getattr(obj, 'medical_info', None),
+            secondary_contact=getattr(obj, 'secondary_contact', None),
             renewal_intent=obj.renewal_intent if hasattr(obj, 'renewal_intent') else False,
             in_grace_period=obj.in_grace_period if hasattr(obj, 'in_grace_period') else False,
             grace_nudge_count=obj.grace_nudge_count if hasattr(obj, 'grace_nudge_count') else 0,
@@ -76,7 +88,7 @@ class StudentRead(BaseModel):
             lead_phone=phone,
             lead_email=email,
             lead_address=address,
-            lead_player_age_category=age_category,
+            lead_player_age=lead_age,
             lead_date_of_birth=lead_dob,
             lead_status=status,
             student_batch_ids=batch_ids
