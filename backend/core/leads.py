@@ -936,3 +936,347 @@ def increment_nudge_count(
         db.refresh(lead)
     
     return lead
+
+
+def verify_and_enroll_from_pending(
+    db: Session,
+    lead_id: int,
+    user_id: int,
+) -> Student:
+    """
+    Verify payment and enroll student from pending_subscription_data.
+    Parses pending data, converts lead to student, clears pending, sends welcome email,
+    and triggers enrollment finalized notification.
+
+    Args:
+        db: Database session
+        lead_id: ID of the lead in Payment Pending Verification
+        user_id: ID of the user performing verification
+
+    Returns:
+        Student with lead and batches loaded (for StudentRead serialization)
+
+    Raises:
+        ValueError: If lead not found, wrong status, or missing/invalid pending data
+    """
+    from backend.core.students import convert_lead_to_student
+    from backend.core.emails import send_welcome_email
+    from backend.core.notifications import notify_center_users
+    from sqlalchemy.orm import selectinload
+    from datetime import date as date_type, timedelta
+
+    lead = get_lead_by_id(db, lead_id)
+    if not lead:
+        raise ValueError("Lead not found")
+    if lead.status != "Payment Pending Verification":
+        raise ValueError("Lead must be in Payment Pending Verification status")
+
+    pending = getattr(lead, "pending_subscription_data", None)
+    if not pending or not isinstance(pending, dict):
+        raise ValueError("No pending subscription data found")
+
+    subscription_plan = pending.get("subscription_plan") or "Monthly"
+    start_date_str = pending.get("start_date")
+    batch_id = pending.get("batch_id")
+    utr_number = pending.get("utr_number")
+    payment_proof_url = pending.get("payment_proof_url")
+    kit_size = pending.get("kit_size")
+    medical_info = pending.get("medical_info")
+    secondary_contact = pending.get("secondary_contact")
+
+    if not start_date_str:
+        raise ValueError("Missing start_date in pending data")
+    try:
+        start_date = date_type.fromisoformat(start_date_str)
+    except ValueError:
+        raise ValueError("Invalid start_date in pending data")
+
+    student_batch_ids = [batch_id] if batch_id else []
+    if not student_batch_ids and getattr(lead, "preferred_batch_id", None):
+        student_batch_ids = [lead.preferred_batch_id]
+
+    months_map = {"Monthly": 1, "Quarterly": 3, "3 Months": 3, "6 Months": 6, "Yearly": 12}
+    months = months_map.get(subscription_plan, 1)
+    end_date = start_date + timedelta(days=months * 31)
+
+    student_data = {
+        "subscription_plan": subscription_plan,
+        "subscription_start_date": start_date,
+        "subscription_end_date": end_date,
+        "utr_number": utr_number,
+        "payment_proof_url": payment_proof_url,
+        "is_payment_verified": True,
+        "kit_size": kit_size,
+        "medical_info": medical_info,
+        "secondary_contact": secondary_contact,
+        "student_batch_ids": student_batch_ids,
+        "center_id": lead.center_id,
+    }
+
+    student = convert_lead_to_student(
+        db=db,
+        lead_id=lead_id,
+        student_data=student_data,
+        user_id=user_id,
+    )
+
+    # Clear pending data
+    lead.pending_subscription_data = None
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+
+    # Send welcome email (non-blocking)
+    try:
+        send_welcome_email(db, student.id)
+    except Exception:
+        pass
+
+    # Enrollment finalized notification
+    try:
+        player_name = lead.player_name or "Player"
+        batch_name = "—"
+        if student_batch_ids:
+            batch = db.get(Batch, student_batch_ids[0])
+            batch_name = batch.name if batch else "—"
+        from urllib.parse import quote
+        notify_center_users(
+            db,
+            student.center_id,
+            type="SALES_ALERT",
+            title=f"🎉 Enrollment Finalized: {player_name}",
+            message=f"Payment has been verified. {player_name} is now an active student in the {batch_name} batch.",
+            target_url=f"/students?search={quote(player_name)}",
+            priority="high",
+        )
+    except Exception:
+        pass
+
+    # Reload student with relationships for response
+    stmt = select(Student).where(Student.id == student.id).options(
+        selectinload(Student.lead),
+        selectinload(Student.batches),
+    )
+    student_with_relations = db.exec(stmt).first()
+    return student_with_relations
+
+
+def create_manual_lead(
+    db: Session,
+    payload: dict,
+    user_id: int,
+) -> Lead:
+    """
+    Create a lead manually (Team Leads and Team Members).
+    Duplicate check, center verification, and notification handled here.
+
+    Payload keys: player_name, phone, email (optional), address (optional),
+    date_of_birth (optional, YYYY-MM-DD), center_id.
+
+    Args:
+        db: Database session
+        payload: Dict with lead creation data
+        user_id: ID of the user creating the lead (for audit context)
+
+    Returns:
+        Created Lead object
+
+    Raises:
+        ValueError: If duplicate exists, center not found, or validation fails
+    """
+    from backend.core.staging import check_duplicate_lead
+    from datetime import timedelta
+    from urllib.parse import quote
+    import os
+
+    player_name = payload.get("player_name")
+    phone = payload.get("phone")
+    if not player_name or not phone:
+        raise ValueError("player_name and phone are required")
+
+    center_id = payload.get("center_id")
+    if not center_id:
+        raise ValueError("center_id is required")
+
+    if check_duplicate_lead(db, player_name, phone):
+        raise ValueError("A lead with this name and phone number already exists")
+
+    center = db.get(Center, center_id)
+    if not center:
+        raise ValueError(f"Center {center_id} not found")
+
+    date_of_birth = payload.get("date_of_birth")
+    dob_parsed = None
+    if date_of_birth:
+        try:
+            dob_parsed = date.fromisoformat(date_of_birth)
+        except (ValueError, TypeError):
+            raise ValueError("date_of_birth must be YYYY-MM-DD")
+
+    now = datetime.utcnow()
+    initial_followup = now + timedelta(hours=24)
+    new_lead = Lead(
+        created_time=now,
+        last_updated=now,
+        player_name=player_name,
+        phone=phone,
+        email=payload.get("email"),
+        address=payload.get("address"),
+        date_of_birth=dob_parsed,
+        center_id=center_id,
+        status="New",
+        public_token=str(uuid.uuid4()),
+        next_followup_date=initial_followup,
+    )
+
+    db.add(new_lead)
+    db.commit()
+    db.refresh(new_lead)
+
+    # In-app notification (Low Priority)
+    try:
+        from backend.core.notifications import notify_center_users
+        base_url = os.getenv("CRM_BASE_URL", "").strip().rstrip("/")
+        link = f"{base_url}/leads?search={quote(new_lead.phone or '')}" if base_url else None
+        center_name = center.display_name or center.city or "Unknown"
+        notify_center_users(
+            db,
+            new_lead.center_id,
+            type="SALES_ALERT",
+            title=f"New Lead: {new_lead.player_name or 'Unknown'}",
+            message=f"New lead added manually at {center_name}. Phone: {new_lead.phone or '—'}.",
+            link=link,
+            priority="low",
+        )
+    except Exception as e:
+        logger.exception("New lead in-app notification failed: %s", e)
+
+    return new_lead
+
+
+def send_enrollment_link(db: Session, lead_id: int) -> dict:
+    """
+    Set enrollment link sent timestamps for a lead. Must be in Trial Attended status.
+    Returns dict with link and expires_at.
+    """
+    from datetime import timedelta
+    import os
+
+    lead = get_lead_by_id(db, lead_id)
+    if not lead:
+        raise ValueError("Lead not found")
+    if lead.status != "Trial Attended":
+        raise ValueError("Lead must be in Trial Attended status")
+    now = datetime.utcnow()
+    expires = now + timedelta(days=7)
+    lead.enrollment_link_sent_at = now
+    lead.link_expires_at = expires
+    lead.last_updated = now
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+    base_url = os.getenv("NEXT_PUBLIC_APP_URL", os.getenv("APP_URL", "https://example.com")).rstrip("/")
+    link = f"{base_url}/join/{lead.public_token}" if lead.public_token else ""
+    return {"message": "Enrollment link sent", "link": link, "expires_at": expires.isoformat()}
+
+
+def update_lead_subscription_fields(
+    db: Session,
+    lead_id: int,
+    subscription_plan: Optional[str] = None,
+    subscription_start_date: Optional[date] = None,
+    subscription_end_date: Optional[date] = None,
+) -> None:
+    """Update subscription fields on a lead. Auto-calculates end_date from plan if needed."""
+    from datetime import timedelta
+
+    lead = get_lead_by_id(db, lead_id)
+    if not lead:
+        raise ValueError("Lead not found")
+    if subscription_plan is not None:
+        lead.subscription_plan = subscription_plan
+    if subscription_start_date is not None:
+        lead.subscription_start_date = subscription_start_date
+        if subscription_plan and not subscription_end_date:
+            if subscription_plan == "Monthly":
+                lead.subscription_end_date = subscription_start_date + timedelta(days=30)
+            elif subscription_plan == "Quarterly":
+                lead.subscription_end_date = subscription_start_date + timedelta(days=90)
+            elif subscription_plan == "6 Months":
+                lead.subscription_end_date = subscription_start_date + timedelta(days=180)
+            elif subscription_plan == "Yearly":
+                lead.subscription_end_date = subscription_start_date + timedelta(days=365)
+    elif subscription_plan and lead.subscription_start_date and not subscription_end_date and not lead.subscription_end_date:
+        if subscription_plan == "Monthly":
+            lead.subscription_end_date = lead.subscription_start_date + timedelta(days=30)
+        elif subscription_plan == "Quarterly":
+            lead.subscription_end_date = lead.subscription_start_date + timedelta(days=90)
+        elif subscription_plan == "6 Months":
+            lead.subscription_end_date = lead.subscription_start_date + timedelta(days=180)
+        elif subscription_plan == "Yearly":
+            lead.subscription_end_date = lead.subscription_start_date + timedelta(days=365)
+    if subscription_end_date is not None:
+        lead.subscription_end_date = subscription_end_date
+    db.add(lead)
+    db.commit()
+    db.refresh(lead)
+
+
+def notify_trial_scheduled(db: Session, lead_id: int) -> None:
+    """Send trial scheduled notification for a lead. No-op if lead not found."""
+    import os
+    from urllib.parse import quote
+    from backend.core.notifications import notify_center_users
+
+    lead = get_lead_by_id(db, lead_id)
+    if not lead or not lead.center_id:
+        return
+    try:
+        base_url = os.getenv("CRM_BASE_URL", "").strip().rstrip("/")
+        link = f"{base_url}/leads?search={quote(lead.phone or '')}" if base_url and lead.phone else None
+        notify_center_users(
+            db, lead.center_id,
+            type="SALES_ALERT",
+            title=f"Trial Scheduled: {lead.player_name or 'Unknown'}",
+            message="A trial has been scheduled for this lead.",
+            link=link,
+            priority="low",
+        )
+    except Exception:
+        pass
+
+
+def can_coach_update_lead_metadata(db: Session, lead_id: int, user_id: int) -> bool:
+    """Check if a coach can update metadata for this lead (must be in their assigned batches)."""
+    coach_batch_ids = list(db.exec(
+        select(BatchCoachLink.batch_id).where(BatchCoachLink.user_id == user_id)
+    ).all())
+    if not coach_batch_ids:
+        return False
+    lead = get_lead_by_id(db, lead_id)
+    if not lead:
+        return False
+    lead_in_batch = (
+        (lead.trial_batch_id and lead.trial_batch_id in coach_batch_ids)
+        or (lead.permanent_batch_id and lead.permanent_batch_id in coach_batch_ids)
+    )
+    if lead_in_batch:
+        return True
+    student = db.exec(select(Student).where(Student.lead_id == lead_id)).first()
+    if not student:
+        return False
+    links = db.exec(
+        select(StudentBatchLink.batch_id).where(
+            StudentBatchLink.student_id == student.id,
+            StudentBatchLink.batch_id.in_(coach_batch_ids),
+        )
+    ).all()
+    return len(list(links)) > 0
+
+
+def get_lead_player_name(db: Session, lead_id: Optional[int]) -> str:
+    """Get player name for a lead, or 'Unknown' if not found."""
+    if not lead_id:
+        return "Unknown"
+    lead = db.get(Lead, lead_id)
+    return lead.player_name if lead else "Unknown"

@@ -3,10 +3,176 @@ Student management business logic.
 Handles conversion from Lead to Student and student operations.
 """
 from sqlmodel import Session, select
+from sqlalchemy.orm import selectinload
+from sqlalchemy import and_
 from typing import List, Optional, Dict, Any
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from backend.models import Student, Lead, StudentBatchLink, Batch
 from backend.core.audit import log_lead_activity
+
+
+def get_student_by_public_token(db: Session, public_token: str) -> Optional[Student]:
+    """
+    Get student by lead's public_token. Used for public renewal pages.
+
+    Args:
+        db: Database session
+        public_token: Lead's public_token
+
+    Returns:
+        Student with lead and batches loaded, or None if not found
+    """
+    lead = db.exec(
+        select(Lead).where(Lead.public_token == public_token)
+    ).first()
+    if not lead:
+        return None
+
+    student = db.exec(
+        select(Student)
+        .where(Student.lead_id == lead.id)
+        .options(selectinload(Student.lead), selectinload(Student.batches))
+    ).first()
+    return student
+
+
+def verify_student_payment(
+    db: Session,
+    student_id: int,
+    user_id: int,
+) -> Student:
+    """
+    Mark student payment as verified. Sets is_payment_verified=True, is_active=True,
+    clears renewal/grace flags. Creates audit log.
+
+    Args:
+        db: Database session
+        student_id: ID of the student
+        user_id: ID of the user performing verification (for audit)
+
+    Returns:
+        Updated Student object
+
+    Raises:
+        ValueError: If student not found
+    """
+    student = db.get(Student, student_id)
+    if not student:
+        raise ValueError("Student not found")
+
+    student.is_payment_verified = True
+    student.renewal_intent = False
+    student.in_grace_period = False
+    student.grace_nudge_count = 0
+    student.is_active = True
+    db.add(student)
+    db.commit()
+    db.refresh(student)
+
+    log_lead_activity(
+        db,
+        student.lead_id,
+        user_id,
+        action_type="payment_verified",
+        description="Payment verified by Team Lead.",
+        new_value="verified",
+    )
+    return student
+
+
+def submit_renewal_confirmation(
+    db: Session,
+    public_token: str,
+    payload: Dict[str, Any],
+) -> None:
+    """
+    Process renewal confirmation from public portal. Validates UTR/screenshot,
+    updates student record, sets renewal_intent=True, is_payment_verified=False.
+    Creates audit log.
+
+    Payload keys: subscription_plan, subscription_start_date, utr_number (optional),
+    payment_proof_url (optional), kit_size (optional), medical_info (optional),
+    secondary_contact (optional).
+
+    Args:
+        db: Database session
+        public_token: Lead's public_token
+        payload: Dict with renewal form data
+
+    Raises:
+        ValueError: If token invalid, student not found, or validation fails
+    """
+    lead = db.exec(
+        select(Lead).where(Lead.public_token == public_token)
+    ).first()
+    if not lead:
+        raise ValueError("Invalid renewal link")
+
+    student = db.exec(
+        select(Student).where(
+            and_(Student.lead_id == lead.id, Student.is_active == True)
+        )
+    ).first()
+    if not student:
+        raise ValueError("Student not found for this link")
+
+    # Validate UTR or payment screenshot
+    utr = (payload.get("utr_number") or "").strip().replace(" ", "")
+    has_utr = len(utr) == 12 and utr.isdigit()
+    has_screenshot = bool(payload.get("payment_proof_url") and str(payload.get("payment_proof_url")).strip())
+
+    if not has_utr and not has_screenshot:
+        raise ValueError("Provide at least one: UTR (12 digits) or payment screenshot")
+    if utr and (len(utr) != 12 or not utr.isdigit()):
+        raise ValueError("UTR must be exactly 12 digits")
+
+    # Parse start date
+    start_date_str = payload.get("subscription_start_date")
+    if not start_date_str:
+        raise ValueError("subscription_start_date is required")
+    try:
+        start_date = date.fromisoformat(start_date_str)
+    except ValueError:
+        raise ValueError("Invalid start_date (use YYYY-MM-DD)")
+
+    months_map = {"Monthly": 1, "Quarterly": 3, "3 Months": 3, "6 Months": 6, "Yearly": 12}
+    months = months_map.get(payload.get("subscription_plan", "Monthly"), 1)
+    end_date = start_date + timedelta(days=months * 31)
+
+    # Update student
+    student.subscription_plan = payload.get("subscription_plan", "Monthly")
+    student.subscription_start_date = start_date
+    student.subscription_end_date = end_date
+    student.utr_number = utr if has_utr else (student.utr_number or None)
+    student.payment_proof_url = (
+        str(payload.get("payment_proof_url")).strip()
+        if has_screenshot and payload.get("payment_proof_url")
+        else None
+    )
+    student.is_payment_verified = False
+    student.renewal_intent = True
+
+    kit_size = payload.get("kit_size")
+    if kit_size is not None:
+        student.kit_size = kit_size or None
+    medical_info = payload.get("medical_info")
+    if medical_info is not None:
+        student.medical_info = medical_info or None
+    secondary_contact = payload.get("secondary_contact")
+    if secondary_contact is not None:
+        student.secondary_contact = secondary_contact or None
+
+    db.add(student)
+    db.commit()
+    db.refresh(student)
+
+    log_lead_activity(
+        db,
+        lead.id,
+        None,
+        action_type="renewal_submitted",
+        description="Parent submitted renewal transaction via public portal. Pending verification.",
+    )
 
 
 def convert_lead_to_student(
@@ -416,9 +582,128 @@ def update_student(
             )
             db.add(link)
     
+    # Reset renewal flags when subscription is renewed
+    if subscription_plan is not None or subscription_start_date is not None or subscription_end_date is not None:
+        student.renewal_intent = False
+        student.in_grace_period = False
+        student.grace_nudge_count = 0
+    
     db.add(student)
     db.commit()
     db.refresh(student)
     
     return student
+
+
+def get_student_with_relations(db: Session, student_id: int) -> Optional[Student]:
+    """Get student by ID with lead and batches loaded."""
+    stmt = select(Student).where(Student.id == student_id).options(
+        selectinload(Student.lead),
+        selectinload(Student.batches),
+    )
+    return db.exec(stmt).first()
+
+
+def get_payment_unverified_students(db: Session) -> List[Dict[str, Any]]:
+    """Get students with UTR but payment not yet verified (for financial audit)."""
+    from sqlalchemy.orm import selectinload
+    from sqlalchemy import and_
+    stmt = (
+        select(Student)
+        .where(
+            and_(
+                Student.utr_number.isnot(None),
+                Student.utr_number != "",
+                Student.is_payment_verified == False,
+            )
+        )
+        .options(selectinload(Student.lead))
+    )
+    students = list(db.exec(stmt).all())
+    return [
+        {
+            "id": s.id,
+            "lead_id": s.lead_id,
+            "player_name": s.lead.player_name if s.lead else "—",
+            "utr_number": s.utr_number,
+            "payment_proof_url": s.payment_proof_url,
+            "date": s.created_at.isoformat() if s.created_at else None,
+        }
+        for s in students
+    ]
+
+
+def update_renewal_intent_by_token(db: Session, public_token: str) -> Dict[str, Any]:
+    """Set renewal_intent=True for student by lead's public_token. Returns dict with success info."""
+    lead = db.exec(select(Lead).where(Lead.public_token == public_token)).first()
+    if not lead:
+        raise ValueError("Invalid renewal link")
+    student = db.exec(
+        select(Student).where(Student.lead_id == lead.id).options(selectinload(Student.lead))
+    ).first()
+    if not student:
+        raise ValueError("Student not found for this link")
+    student.renewal_intent = True
+    db.add(student)
+    db.commit()
+    db.refresh(student)
+    return {
+        "success": True,
+        "message": "Renewal intent recorded. Our team will follow up for payment.",
+        "student_id": student.id,
+        "player_name": lead.player_name if lead else None,
+    }
+
+
+def send_grace_nudge(db: Session, student_id: int, user_id: int) -> Dict[str, Any]:
+    """Increment grace_nudge_count for a student in grace period. Returns dict with new count."""
+    from backend.models import AuditLog
+
+    student = db.get(Student, student_id)
+    if not student:
+        raise ValueError("Student not found")
+    if not student.in_grace_period:
+        raise ValueError("Student is not in grace period")
+    if student.grace_nudge_count >= 2:
+        raise ValueError("Maximum grace nudges (2) already sent")
+    old_count = student.grace_nudge_count
+    student.grace_nudge_count = old_count + 1
+    if student.lead:
+        audit_log = AuditLog(
+            lead_id=student.lead_id,
+            user_id=user_id,
+            action_type="grace_nudge_sent",
+            description=f"Grace period nudge sent (grace_nudge_count: {old_count} → {student.grace_nudge_count})",
+            old_value=str(old_count),
+            new_value=str(student.grace_nudge_count),
+            timestamp=datetime.utcnow(),
+        )
+        db.add(audit_log)
+    db.add(student)
+    db.commit()
+    db.refresh(student)
+    return {"message": "Grace nudge sent successfully", "grace_nudge_count": student.grace_nudge_count}
+
+
+def can_user_view_student_milestones(db: Session, student_id: int, user_id: int, user_role: str, user_center_ids: List[int]) -> bool:
+    """Check if user can view milestones for this student. Coaches: must have student in batch; others: center match."""
+    from backend.models import BatchCoachLink, StudentBatchLink
+
+    student = db.get(Student, student_id)
+    if not student:
+        return False
+    if user_role == "coach":
+        coach_batch_ids = list(db.exec(select(BatchCoachLink.batch_id).where(BatchCoachLink.user_id == user_id)).all())
+        if not coach_batch_ids:
+            return False
+        links = db.exec(
+            select(StudentBatchLink.batch_id).where(
+                StudentBatchLink.student_id == student_id,
+                StudentBatchLink.batch_id.in_(coach_batch_ids),
+            )
+        ).all()
+        return len(list(links)) > 0
+    if user_role == "team_lead":
+        return True
+    return student.center_id in user_center_ids
 

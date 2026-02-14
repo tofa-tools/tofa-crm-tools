@@ -3,6 +3,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { HomeScreen } from '../screens/HomeScreen';
 import { LeadsScreen } from '../screens/LeadsScreen';
 import { TasksScreen } from '../screens/TasksScreen';
+import { AttendanceScreen } from '../screens/AttendanceScreen';
 import { MoreScreen } from '../screens/MoreScreen';
 import type { MainTabParamList } from './types';
 import { brandColors } from '../theme/brandTheme';
@@ -24,6 +25,7 @@ export function MainTabs() {
       <Tab.Screen name="Home" component={HomeScreen} />
       <Tab.Screen name="Leads" component={LeadsScreen} />
       <Tab.Screen name="Tasks" component={TasksScreen} />
+      <Tab.Screen name="Attendance" component={AttendanceScreen} />
       <Tab.Screen name="More" component={MoreScreen} />
     </Tab.Navigator>
   );

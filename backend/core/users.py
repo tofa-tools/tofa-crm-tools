@@ -3,9 +3,66 @@ User management business logic.
 Framework-agnostic user CRUD operations.
 """
 from sqlmodel import Session, select
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from backend.models import User, UserCenterLink
 from backend.core.auth import get_password_hash
+
+
+def get_user_with_centers(db: Session, user_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Fetch a user and include their center_ids from the UserCenterLink table.
+
+    Args:
+        db: Database session
+        user_id: ID of the user to fetch
+
+    Returns:
+        Dict with user fields (email, full_name, role) and center_ids if found, None otherwise
+    """
+    user = get_user_by_id(db, user_id)
+    if not user:
+        return None
+
+    center_links = db.exec(
+        select(UserCenterLink).where(UserCenterLink.user_id == user_id)
+    ).all()
+    center_ids = [link.center_id for link in center_links]
+
+    return {
+        "id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role,
+        "center_ids": center_ids,
+    }
+
+
+def get_all_users_with_centers(db: Session) -> List[Dict[str, Any]]:
+    """
+    List all users with their center assignments (center_ids).
+
+    Args:
+        db: Database session
+
+    Returns:
+        List of dicts with user fields and center_ids
+    """
+    users = get_all_users(db)
+    result = []
+    for user in users:
+        center_links = db.exec(
+            select(UserCenterLink).where(UserCenterLink.user_id == user.id)
+        ).all()
+        result.append({
+            "id": user.id,
+            "email": user.email,
+            "full_name": user.full_name,
+            "phone": getattr(user, "phone", None),
+            "role": user.role,
+            "is_active": user.is_active,
+            "center_ids": [link.center_id for link in center_links],
+        })
+    return result
 
 
 def get_user_by_email(db: Session, email: str) -> Optional[User]:

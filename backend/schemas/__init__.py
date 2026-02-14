@@ -6,6 +6,7 @@ from .batches import BatchCreate, BatchRead, BatchUpdate
 from .attendance import AttendanceCreate, AttendanceRead, AttendanceUpdate
 from .leads import LeadCreate, LeadUpdate, LeadRead, LeadReadCoach
 from .bulk import BulkUpdateStatusRequest, BulkAssignCenterRequest
+from .centers import CenterCreate, CenterUpdate
 
 __all__ = [
     # Users
@@ -28,5 +29,8 @@ __all__ = [
     # Bulk operations
     "BulkUpdateStatusRequest",
     "BulkAssignCenterRequest",
+    # Centers
+    "CenterCreate",
+    "CenterUpdate",
 ]
 

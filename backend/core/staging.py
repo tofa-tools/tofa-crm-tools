@@ -122,7 +122,20 @@ def create_staging_lead(
     db.add(staging_lead)
     db.commit()
     db.refresh(staging_lead)
-    
+    try:
+        from backend.core.notifications import notify_center_users
+        from backend.core.centers import get_center_display_name
+        center_name = get_center_display_name(db, center_id)
+        notify_center_users(
+            db, center_id,
+            type="SALES_ALERT",
+            title=f"New Walk-In Lead: {player_name} at {center_name}",
+            message=f"Field capture submitted for {player_name} at {center_name}.",
+            target_url="/staging",
+            priority="high",
+        )
+    except Exception:
+        pass
     return staging_lead
 
 

@@ -733,29 +733,16 @@ export const attendanceAPI = {
     date?: string;
     remarks?: string;
   }): Promise<{
-    status: string;
-    attendance_id: number;
-    lead_id?: number;
-    student_id?: number;
+    id: number;
+    lead_id: number;
     batch_id: number;
+    user_id: number;
     date: string;
+    status: string;
+    remarks?: string | null;
+    recorded_at?: string | null;
   }> => {
-    const params = buildQueryParams({
-      lead_id: data.lead_id,
-      student_id: data.student_id,
-      batch_id: data.batch_id,
-      status: data.status,
-      date: data.date,
-      remarks: data.remarks,
-    });
-
-    const response = await apiClient.post<{
-      status: string;
-      attendance_id: number;
-      lead_id: number;
-      batch_id: number;
-      date: string;
-    }>('/attendance/check-in', null, { params });
+    const response = await apiClient.post('/attendance/check-in', data);
     return response.data;
   },
 

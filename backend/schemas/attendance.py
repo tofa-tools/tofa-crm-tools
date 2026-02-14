@@ -1,19 +1,30 @@
 """
 Pydantic schemas for Attendance operations.
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from typing import Optional
 from datetime import date, datetime
 
 
 class AttendanceCreate(BaseModel):
-    """Schema for creating/recording attendance."""
-    lead_id: int
+    """Schema for creating/recording attendance.
+    Provide either lead_id (trial students) or student_id (active students).
+    """
+    lead_id: Optional[int] = None
+    student_id: Optional[int] = None
     batch_id: int
-    date: date
+    date: Optional[date] = None  # Defaults to today if not provided
     status: str  # 'Present', 'Absent', 'Excused', 'Late'
     remarks: Optional[str] = None
     internal_note: Optional[str] = None  # Coach's internal feedback (for Present marks)
+
+    @model_validator(mode="after")
+    def require_lead_or_student(self):
+        if not self.lead_id and not self.student_id:
+            raise ValueError("Either lead_id or student_id is required")
+        if self.lead_id and self.student_id:
+            raise ValueError("Provide only one of lead_id or student_id")
+        return self
 
 
 class AttendanceRead(BaseModel):

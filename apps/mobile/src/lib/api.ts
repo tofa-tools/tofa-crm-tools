@@ -4,8 +4,11 @@ import { buildQueryParams, isTokenExpired } from '@tofa/core';
 import { API_URL } from './config';
 import * as storage from './storage';
 
+// No trailing slash on baseURL (prevents 307 redirects)
+const baseURL = API_URL.replace(/\/+$/, '');
+
 const apiClient: AxiosInstance = axios.create({
-  baseURL: API_URL,
+  baseURL,
   headers: { 'Content-Type': 'application/json' },
 });
 
@@ -66,6 +69,56 @@ export const tasksAPI = {
     const params = targetDate ? { target_date: targetDate } : {};
     const { data } = await apiClient.get('/tasks/daily-queue', { params });
     return data;
+  },
+};
+
+export const batchesAPI = {
+  getMyBatches: async (): Promise<{ batches: Array<Record<string, unknown>>; count: number }> => {
+    const { data } = await apiClient.get('/batches/my-batches');
+    return data;
+  },
+};
+
+export const leadsAPI = {
+  getMyLeads: async (params?: { limit?: number; status?: string }): Promise<{ leads: Lead[]; total: number }> => {
+    const { data } = await apiClient.get('/leads/my_leads', { params });
+    return data;
+  },
+};
+
+export const studentsAPI = {
+  getStudents: async (params?: { center_id?: number; is_active?: boolean }): Promise<Array<Record<string, unknown>>> => {
+    const { data } = await apiClient.get('/students', { params });
+    return data;
+  },
+};
+
+/** Attendance API - sends JSON body (lead_id or student_id required). */
+export const attendanceAPI = {
+  checkIn: async (data: {
+    lead_id?: number;
+    student_id?: number;
+    batch_id: number;
+    status: string;
+    date?: string;
+    remarks?: string;
+  }): Promise<{ id: number; lead_id: number; batch_id: number; date: string; status: string }> => {
+    const { data: result } = await apiClient.post('/attendance/check-in', data);
+    return result;
+  },
+};
+
+/** Staging API - sends JSON body for field capture. */
+export const stagingAPI = {
+  createStagingLead: async (data: {
+    player_name: string;
+    phone: string;
+    email?: string;
+    age?: number;
+    center_id: number;
+  }): Promise<unknown> => {
+    const { data: result } = await apiClient.post('/staging/leads', data);
+    return result;
   },
 };
 

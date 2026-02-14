@@ -74,6 +74,60 @@ def get_pending_requests(db: Session) -> List[ApprovalRequest]:
     return list(db.exec(stmt).all())
 
 
+def get_pending_requests_formatted(
+    db: Session, user_id: int, user_role: str
+) -> List[dict]:
+    """Get pending requests formatted for API. Team leads see all; team members see only their own."""
+    requests = get_pending_requests(db)
+    formatted = []
+    for req in requests:
+        lead = db.get(Lead, req.lead_id) if req.lead_id else None
+        student = db.get(Student, req.student_id) if req.student_id else None
+        lead_for_name = lead or (db.get(Lead, student.lead_id) if student else None)
+        requester = db.get(User, req.requested_by_id)
+        formatted.append({
+            "id": req.id,
+            "request_type": req.request_type,
+            "lead_id": req.lead_id,
+            "student_id": req.student_id,
+            "lead_name": lead_for_name.player_name if lead_for_name else "Unknown",
+            "requested_by_id": req.requested_by_id,
+            "requested_by_name": requester.full_name if requester else "Unknown",
+            "current_value": req.current_value,
+            "requested_value": req.requested_value,
+            "reason": req.reason,
+            "status": req.status,
+            "created_at": req.created_at.isoformat() if req.created_at else None,
+        })
+    if user_role == "team_member":
+        formatted = [r for r in formatted if r["requested_by_id"] == user_id]
+    formatted.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return formatted
+
+
+def get_lead_requests_formatted(db: Session, lead_id: int) -> List[dict]:
+    """Get approval requests for a lead, formatted for API."""
+    requests = get_requests_for_lead(db, lead_id)
+    formatted = []
+    for req in requests:
+        requester = db.get(User, req.requested_by_id)
+        resolver = db.get(User, req.resolved_by_id) if req.resolved_by_id else None
+        formatted.append({
+            "id": req.id,
+            "type": req.request_type,
+            "current_status": req.current_value,
+            "requested_status": req.requested_value,
+            "reason": req.reason,
+            "request_status": req.status,
+            "requested_by_name": requester.full_name if requester else "Unknown",
+            "resolved_by_name": resolver.full_name if resolver else None,
+            "created_at": req.created_at.isoformat() if req.created_at else None,
+            "resolved_at": req.resolved_at.isoformat() if req.resolved_at else None,
+        })
+    formatted.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return formatted
+
+
 def get_requests_for_lead(db: Session, lead_id: int) -> List[ApprovalRequest]:
     """Get all approval requests for a lead (any status)."""
     direct = list(db.exec(
@@ -135,6 +189,22 @@ def resolve_request(
     db.add(req)
     db.commit()
     db.refresh(req)
+    try:
+        from backend.core.notifications import send_notification
+        from backend.core.leads import get_lead_player_name
+        from urllib.parse import quote
+        player_name = get_lead_player_name(db, req.lead_id)
+        status_text = "Approved" if approved else "Rejected"
+        send_notification(
+            db, req.requested_by_id,
+            type="GOVERNANCE_ALERT",
+            title=f"Request {status_text}: {player_name}",
+            message=f"Update: Your status change request for {player_name} has been {status_text}.",
+            target_url=f"/leads?search={quote(player_name)}",
+            priority="high",
+        )
+    except Exception:
+        pass
     return req
 
 

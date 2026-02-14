@@ -17,6 +17,14 @@ def get_center_by_id(db: Session, center_id: int) -> Optional[Center]:
     return db.get(Center, center_id)
 
 
+def get_center_display_name(db: Session, center_id: Optional[int]) -> str:
+    """Get display name for a center (display_name or city or 'Unknown')."""
+    if not center_id:
+        return "Unknown"
+    center = db.get(Center, center_id)
+    return (center.display_name or center.city or "Unknown") if center else "Unknown"
+
+
 def get_center_by_meta_tag(db: Session, meta_tag: str) -> Optional[Center]:
     """Get a center by meta tag name."""
     return db.exec(select(Center).where(Center.meta_tag_name == meta_tag)).first()

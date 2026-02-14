@@ -116,7 +116,21 @@ def bulk_update_lead_assignment(
     
     if updated_count > 0:
         db.commit()
-    
+        try:
+            from backend.core.notifications import notify_center_users
+            from backend.core.centers import get_center_display_name
+            center_name = get_center_display_name(db, new_center_id)
+            notify_center_users(
+                db, new_center_id,
+                type="OPS_ALERT",
+                title=f"{updated_count} lead(s) assigned to your center",
+                message=f"{updated_count} lead(s) have been assigned to {center_name}. Check Leads to follow up.",
+                link="/leads",
+                priority="low",
+            )
+        except Exception:
+            pass
+
     return {
         "updated_count": updated_count,
         "errors": errors
